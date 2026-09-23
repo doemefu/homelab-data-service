@@ -70,7 +70,8 @@ public class InboundQueryRepository {
                                coalesce(e.blocklisted, false)      AS blocklisted,
                                e.abuseipdb_score                   AS abuse_score,
                                (SELECT count(*) FROM netmon.firewall_events f
-                                WHERE f.client_ip = r.client_ip AND f.occurred_at >= :from AND f.occurred_at < :to)
+                                WHERE f.client_ip = r.client_ip AND f.occurred_at >= :from AND f.occurred_at < :to
+                                  AND (CAST(:host AS text) IS NULL OR f.host = CAST(:host AS text)))
                                                                    AS firewall_events
                         FROM netmon.inbound_request_groups r
                         LEFT JOIN netmon.ip_enrichment e ON e.ip = r.client_ip
@@ -229,8 +230,10 @@ public class InboundQueryRepository {
                 .param("ip", ip)
                 .query((rs, i) -> {
                     Instant checkedAt = instant(rs, "abuseipdb_checked_at");
-                    AbuseIpDb abuse = checkedAt == null ? null
-                            : new AbuseIpDb(integer(rs, "abuseipdb_score"), integer(rs, "abuseipdb_reports"), checkedAt);
+                    // A per-IP check failure records checked_at without a score: still "not checked" for the API.
+                    Integer score = integer(rs, "abuseipdb_score");
+                    AbuseIpDb abuse = checkedAt == null || score == null ? null
+                            : new AbuseIpDb(score, integer(rs, "abuseipdb_reports"), checkedAt);
                     String[] seenIn = (String[]) rs.getArray("seen_in").getArray();
                     return new Enrichment(rs.getString("ip"), instant(rs, "first_seen"), instant(rs, "last_seen"),
                             Arrays.stream(seenIn).sorted().toList(), rs.getString("country"), integer(rs, "asn"),

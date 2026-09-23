@@ -19,6 +19,16 @@ import tools.jackson.databind.json.JsonMapper;
 @Component
 public class AbuseIpDbClient {
 
+    /**
+     * A failure specific to the checked IP after AbuseIPDB answered (non-2xx other than 401/403/429, or a
+     * body without score/reports). The call counts against the budget; the collector skips the IP.
+     */
+    public static final class PerIpFailure extends CollectorException {
+        PerIpFailure(String safeMessage) {
+            super(ErrorCode.UPSTREAM, safeMessage);
+        }
+    }
+
     /** Result of one check. */
     public record Reputation(int score, int reports) {
     }
@@ -55,18 +65,18 @@ public class AbuseIpDbClient {
             throw new CollectorException(ErrorCode.RATE_LIMITED, "AbuseIPDB rate limit (HTTP 429)");
         }
         if (status < 200 || status >= 300) {
-            throw new CollectorException(ErrorCode.UPSTREAM, "AbuseIPDB answered HTTP " + status);
+            throw new PerIpFailure("AbuseIPDB answered HTTP " + status);
         }
         try {
             JsonNode data = jsonMapper.readTree(response.body()).path("data");
             JsonNode score = data.path("abuseConfidenceScore");
             JsonNode reports = data.path("totalReports");
             if (!score.isNumber() || !reports.isNumber()) {
-                throw new CollectorException(ErrorCode.UPSTREAM, "AbuseIPDB response lacks score or reports");
+                throw new PerIpFailure("AbuseIPDB response lacks score or reports");
             }
             return new Reputation(Math.clamp(score.asInt(), 0, 100), Math.max(reports.asInt(), 0));
         } catch (JacksonException e) {
-            throw new CollectorException(ErrorCode.UPSTREAM, "AbuseIPDB returned malformed JSON");
+            throw new PerIpFailure("AbuseIPDB returned malformed JSON");
         }
     }
 

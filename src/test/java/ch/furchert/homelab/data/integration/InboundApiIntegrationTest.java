@@ -131,6 +131,22 @@ class InboundApiIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void topClientIpFirewallCountFollowsTheHostFilter() throws Exception {
+        jdbc.sql("""
+                INSERT INTO netmon.firewall_events (occurred_at, ray_name, client_ip, action, security_source, host, source)
+                VALUES ('2026-09-23T08:40:00Z', 'ray-d', '203.0.113.7', 'block', 'firewallManaged', 'auth.furchert.ch',
+                        'cloudflare-graphql')
+                """).update();
+
+        call("/api/netmon/inbound/summary", "from", FROM, "to", TO)
+                .andExpect(jsonPath("$.topClientIps[0].ip").value("203.0.113.7"))
+                .andExpect(jsonPath("$.topClientIps[0].firewallEvents").value(1));
+        call("/api/netmon/inbound/summary", "from", FROM, "to", TO, "host", "furchert.ch")
+                .andExpect(jsonPath("$.topClientIps[0].ip").value("203.0.113.7"))
+                .andExpect(jsonPath("$.topClientIps[0].firewallEvents").value(0));
+    }
+
+    @Test
     void longWindowsUseDailyTimelineBuckets() throws Exception {
         call("/api/netmon/inbound/summary", "from", "2026-09-15T00:00:00Z", "to", TO)
                 .andExpect(status().isOk())

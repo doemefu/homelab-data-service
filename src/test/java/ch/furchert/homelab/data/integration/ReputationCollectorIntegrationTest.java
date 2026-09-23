@@ -110,6 +110,23 @@ class ReputationCollectorIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void aFailureSpecificToOneIpIsCountedAndSkipped() {
+        collector("key-1", 10, 200, s -> {
+            s.expect(requestTo(URL + "?ipAddress=198.51.100.1&maxAgeInDays=90"))
+                    .andRespond(withStatus(HttpStatus.UNPROCESSABLE_CONTENT));
+            s.expect(requestTo(URL + "?ipAddress=198.51.100.2&maxAgeInDays=90"))
+                    .andRespond(withSuccess(body(3, 1), MediaType.APPLICATION_JSON));
+        }).collect();
+
+        assertThat(state.find(ReputationCollector.NAME).orElseThrow().cursor()).isEqualTo("2026-09-23:2");
+        assertThat(jdbc.sql("""
+                        SELECT host(ip) || ':' || coalesce(abuseipdb_score::text, 'null') FROM netmon.ip_enrichment
+                        WHERE abuseipdb_checked_at IS NOT NULL AND ip IN ('198.51.100.1', '198.51.100.2') ORDER BY ip
+                        """).query(String.class).list())
+                .containsExactly("198.51.100.1:null", "198.51.100.2:3");
+    }
+
+    @Test
     void respectsTheDailyBudget() {
         state.updateCursor(ReputationCollector.NAME, "2026-09-23:199");
         collector("key-1", 10, 200, s -> s.expect(requestTo(URL + "?ipAddress=198.51.100.1&maxAgeInDays=90"))

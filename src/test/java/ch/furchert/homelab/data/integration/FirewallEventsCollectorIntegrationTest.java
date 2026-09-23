@@ -128,6 +128,34 @@ class FirewallEventsCollectorIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void afterAPageCapStopTheNextRunResumesWithoutOverlapAndClearsTheMarker() {
+        collector(2, 2, s -> {
+            expectPage(s, "datetime_geq", Instant.parse("2026-09-22T10:28:00Z"), List.of(ev(0, "a", "block"), ev(1, "b", "block")));
+            expectPage(s, "datetime_geq", T0.plusSeconds(1), List.of(ev(1, "b", "block"), ev(2, "c", "block")));
+        }).collect();
+        assertThat(state.find(FirewallEventsCollector.NAME).orElseThrow().cursor()).isEqualTo("capped");
+
+        // Resumes exactly at the last fetched event (T0+2s), not 10 minutes before it.
+        collector(2, 2, s -> expectPage(s, "datetime_geq", T0.plusSeconds(2), List.of(ev(2, "c", "block")))).collect();
+
+        assertThat(highWaterMark()).isEqualTo(Instant.parse("2026-09-23T10:28:00Z"));
+        assertThat(state.find(FirewallEventsCollector.NAME).orElseThrow().cursor()).isNull();
+    }
+
+    @Test
+    void aPageCapInsideTheOverlapNeverMovesTheHighWaterMarkBackward() {
+        Instant previous = Instant.parse("2026-09-23T10:20:00Z");
+        state.updateWindowEnd(FirewallEventsCollector.NAME, previous);
+
+        collector(2, 1, s -> expectPage(s, "datetime_geq", previous.minus(java.time.Duration.ofMinutes(10)),
+                List.of(event(previous.minusSeconds(300), "x", "198.51.100.9", "block", "r"),
+                        event(previous.minusSeconds(299), "y", "198.51.100.9", "block", "r")))).collect();
+
+        assertThat(highWaterMark()).isEqualTo(previous);
+        assertThat(state.find(FirewallEventsCollector.NAME).orElseThrow().cursor()).isEqualTo("capped");
+    }
+
+    @Test
     void oneRequestCanTriggerSeveralEvents() {
         collector(10, 20, s -> expectPage(s, "datetime_geq", Instant.parse("2026-09-22T10:28:00Z"), List.of(
                 event(T0, "same-ray", "198.51.100.9", "log", "rule-1"),

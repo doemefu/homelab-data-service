@@ -145,12 +145,15 @@ class InboundRequestsCollectorIntegrationTest extends AbstractIntegrationTest {
         Instant now = Instant.parse("2026-09-23T10:30:00Z");
         state.updateWindowEnd(InboundRequestsCollector.NAME, Instant.parse("2026-09-20T00:00:00Z"));
 
-        collector(now, 5000, 2, s -> {
-            expectWindow(s, "2026-09-22T10:00:00Z", "2026-09-22T11:00:00Z", HOUR9);
-            expectWindow(s, "2026-09-22T11:00:00Z", "2026-09-22T12:00:00Z", groupsResponse());
+        // The minimum budget of 13 queries covers 13 unsliced hours from the 24 h floor.
+        collector(now, 5000, 13, s -> {
+            for (int h = 10; h < 23; h++) {
+                expectWindow(s, "2026-09-22T%02d:00:00Z".formatted(h), "2026-09-22T%02d:00:00Z".formatted(h + 1),
+                        h == 10 ? HOUR9 : groupsResponse());
+            }
         }).collect();
 
-        assertThat(highWaterMark()).isEqualTo(Instant.parse("2026-09-22T12:00:00Z"));
+        assertThat(highWaterMark()).isEqualTo(Instant.parse("2026-09-22T23:00:00Z"));
     }
 
     @Test

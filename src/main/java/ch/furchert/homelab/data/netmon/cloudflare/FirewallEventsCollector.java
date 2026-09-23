@@ -28,7 +28,9 @@ import java.util.List;
  *   <li>A full page continues at {@code datetime_geq} = its last {@code datetime}; if the whole page shares
  *       one timestamp it continues with {@code datetime_gt} and the run reports {@code truncated}.</li>
  *   <li>At most {@code firewall-max-pages} pages per run. On reaching {@code until}, the high-water mark
- *       becomes {@code until}; on hitting the cap it becomes the last fetched {@code datetime}.</li>
+ *       becomes {@code until}; on hitting the cap it becomes the last fetched {@code datetime}, and the
+ *       next run resumes exactly there (no overlap, marked by {@code cursor = capped}) so a backlog that
+ *       exceeds the page budget still advances. The high-water mark never moves backward.</li>
  * </ul>
  */
 @Component
@@ -38,6 +40,8 @@ public class FirewallEventsCollector implements NetmonCollector {
     static final Duration INGEST_DELAY = Duration.ofMinutes(2);
     static final Duration OVERLAP = Duration.ofMinutes(10);
     static final Duration CATCH_UP = Duration.ofHours(24);
+    /** {@code collector_state.cursor} after a run stopped at the page cap: resume without the overlap. */
+    static final String CAPPED = "capped";
 
     private static final Logger log = LoggerFactory.getLogger(FirewallEventsCollector.class);
 
@@ -86,7 +90,9 @@ public class FirewallEventsCollector implements NetmonCollector {
     public void collect() {
         Instant until = clock.instant().truncatedTo(ChronoUnit.SECONDS).minus(INGEST_DELAY);
         Instant floor = until.minus(CATCH_UP);
-        Instant previous = state.find(NAME).map(CollectorState::lastWindowEnd).orElse(null);
+        CollectorState current = state.find(NAME).orElse(null);
+        Instant previous = current == null ? null : current.lastWindowEnd();
+        boolean resumeAfterCap = current != null && CAPPED.equals(current.cursor());
         Instant since;
         if (previous == null) {
             since = floor;
@@ -94,7 +100,7 @@ public class FirewallEventsCollector implements NetmonCollector {
             if (previous.isBefore(floor)) {
                 log.info("[{}] gap skipped from={} to={}", NAME, previous, floor);
             }
-            since = max(previous.minus(OVERLAP), floor);
+            since = max(resumeAfterCap ? previous : previous.minus(OVERLAP), floor);
         }
 
         int limit = properties.firewallPageSize();
@@ -126,10 +132,14 @@ public class FirewallEventsCollector implements NetmonCollector {
 
         if (reachedEnd) {
             state.updateWindowEnd(NAME, until);
+            if (resumeAfterCap) {
+                state.updateCursor(NAME, null);
+            }
         } else if (lastFetched != null) {
             log.info("[{}] page cap of {} reached; resuming from the last fetched event next run", NAME,
                     properties.firewallMaxPages());
-            state.updateWindowEnd(NAME, lastFetched);
+            state.updateWindowEnd(NAME, previous == null ? lastFetched : max(previous, lastFetched));
+            state.updateCursor(NAME, CAPPED);
         }
         if (truncated) {
             throw new CollectorWarning(ErrorCode.TRUNCATED,

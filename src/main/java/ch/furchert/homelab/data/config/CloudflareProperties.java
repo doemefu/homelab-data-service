@@ -14,7 +14,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param groupsPageSize   {@code limit} for query A; min(maxPageSize, 5000) per §4.2
  * @param firewallPageSize {@code limit} for query B; min(maxPageSize, 1000) per §4.2
  * @param firewallMaxPages page cap per firewall run (§4.2: 20)
- * @param maxQueriesPerRun catch-up throttle for the request-groups collector (§4.2: 60 per 5-min run)
+ * @param maxQueriesPerRun catch-up throttle for the request-groups collector (§4.2: 60 per 5-min run); at least
+ *                         {@link #MIN_QUERIES_PER_RUN}, or a full-page hour could never be collected
  */
 @ConfigurationProperties("netmon.cloudflare")
 public record CloudflareProperties(
@@ -26,9 +27,17 @@ public record CloudflareProperties(
         @DefaultValue("20") int firewallMaxPages,
         @DefaultValue("60") int maxQueriesPerRun) {
 
+    /** One hour query plus 12 five-minute slices ({@code InboundRequestsCollector.SLICES}). */
+    public static final int MIN_QUERIES_PER_RUN = 13;
+
     public CloudflareProperties {
-        if (groupsPageSize < 1 || firewallPageSize < 1 || firewallMaxPages < 1 || maxQueriesPerRun < 2) {
-            throw new IllegalArgumentException("netmon.cloudflare: page sizes and caps must be positive");
+        if (groupsPageSize < 1 || firewallPageSize < 1 || firewallMaxPages < 1) {
+            throw new IllegalArgumentException(
+                    "netmon.cloudflare: groups-page-size, firewall-page-size and firewall-max-pages must be >= 1");
+        }
+        if (maxQueriesPerRun < MIN_QUERIES_PER_RUN) {
+            throw new IllegalArgumentException("netmon.cloudflare.max-queries-per-run must be >= "
+                    + MIN_QUERIES_PER_RUN + " (one hour query plus 12 five-minute slices), was " + maxQueriesPerRun);
         }
     }
 

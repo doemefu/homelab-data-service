@@ -31,7 +31,10 @@ import java.util.List;
  *       in priority order — (2) a firewall event other than skip/log in 24 h, (3) ≥ 50 requests in 24 h
  *       with ≥ 50 % status ≥ 400, (4) top 5 by requests in 24 h. Threshold (1), failed logins, arrives
  *       with the NM-4 {@code login_events} table.</li>
- *   <li>A 429 stops the run and marks the day's budget as exhausted.</li>
+ *   <li>A 429 stops the run and marks the day's budget as exhausted; 401/403 and an unreachable AbuseIPDB
+ *       stop the run. A failure specific to one IP (other HTTP errors, an incomplete body) counts against
+ *       the budget, sets {@code abuseipdb_checked_at} without a score so the IP rests for 7 days, and the
+ *       run continues with the next candidate.</li>
  * </ul>
  */
 @Component
@@ -129,10 +132,20 @@ public class ReputationCollector implements NetmonCollector {
                 .query(String.class)
                 .list();
         int checked = 0;
+        int failed = 0;
         for (String ip : candidates) {
             AbuseIpDbClient.Reputation reputation;
             try {
                 reputation = client.check(ip);
+            } catch (AbuseIpDbClient.PerIpFailure e) {
+                used++;
+                failed++;
+                state.updateCursor(NAME, cursor(today, used));
+                jdbc.sql("UPDATE netmon.ip_enrichment SET abuseipdb_checked_at = :now WHERE ip = CAST(:ip AS inet)")
+                        .param("now", now)
+                        .param("ip", ip)
+                        .update();
+                continue;
             } catch (CollectorException e) {
                 if (e.code() == ErrorCode.RATE_LIMITED) {
                     state.updateCursor(NAME, cursor(today, properties.dailyBudget()));
@@ -153,7 +166,7 @@ public class ReputationCollector implements NetmonCollector {
                     .param("ip", ip)
                     .update();
         }
-        log.info("[{}] checked={} usedToday={}", NAME, checked, used);
+        log.info("[{}] checked={} failed={} usedToday={}", NAME, checked, failed, used);
     }
 
     private int usedToday(LocalDate today) {
