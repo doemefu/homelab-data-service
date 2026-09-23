@@ -1,0 +1,72 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### macOS ###
+.DS_Store
+
+### Environment ###
+.env
+.env.local
+.env.*.local
+*.pem
+
+### Claude Code ###
+# agents/, rules/, CLAUDE.md are tracked; memory, worklogs and worktrees are local-only.
+.claude/settings.json
+.claude/settings.local.json
+.claude/**/.DS_Store
+/.claude/memory/
+/.claude/worklogs/
+/.claude/worktrees/
+
+### Build & cache ###
+*.class
+*.jar
+*.war
+*.zip
+*.tar.gz
+.m2/
+
+### Temp / editor ###
+*.tmp
+*.bak
+*~
+*.swp
+*.swo
+*.orig
+Thumbs.db
+
+### JVM crash logs ###
+hs_err_pid*
+replay_pid*

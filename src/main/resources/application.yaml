@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: data-service
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/data_service}
+    username: ${DB_USERNAME:data_service}
+    password: ${DB_PASSWORD}
+
+  # docs/060 §3.1/§3.4: history table in public, telemetry in the netmon schema.
+  flyway:
+    enabled: true
+    table: flyway_schema_history_data
+    default-schema: public
+    schemas: public,netmon
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Keys come from the cluster-internal JWKS. issuer-uri is set as well so that the
+          # iss claim is validated; with jwk-set-uri present Boot needs no OIDC discovery call
+          # (docs/060 §7.5).
+          jwk-set-uri: ${JWKS_URI:http://localhost:8080/oauth2/jwks}
+          issuer-uri: ${JWT_ISSUER:https://auth.furchert.ch}
+
+  # docs/060 §4.1: every collector runs on the Boot-managed scheduler.
+  task:
+    scheduling:
+      pool:
+        size: 4
+
+  # The service serves no static content; unknown paths become 404 problem+json.
+  web:
+    resources:
+      add-mappings: false
+
+server:
+  port: 8082
+  forward-headers-strategy: native
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+
+netmon:
+  api:
+    # docs/060 §7.5 (v1): only these token subjects may read /api/netmon/**.
+    allowed-clients: [ furchert-ch ]
