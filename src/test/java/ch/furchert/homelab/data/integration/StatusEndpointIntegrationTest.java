@@ -45,10 +45,10 @@ class StatusEndpointIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(header().string("Pragma", "no-cache"))
-                .andExpect(jsonPath("$.collectors[0].name").value("retention"))
-                .andExpect(jsonPath("$.collectors[0].enabled").value(true))
-                .andExpect(jsonPath("$.collectors[0].consecutiveFailures").value(0))
-                .andExpect(jsonPath("$.collectors[0].stale").value(false))
+                .andExpect(jsonPath("$.collectors[*].name").value(org.hamcrest.Matchers.hasItem("retention")))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'retention')].enabled").value(true))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'retention')].consecutiveFailures").value(0))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'retention')].stale").value(false))
                 // Absent optional values are null, never omitted (§7.1).
                 .andExpect(content().string(containsString("\"lastSuccessAt\":null")))
                 .andExpect(content().string(containsString("\"lastWindowEnd\":null")))
@@ -68,11 +68,22 @@ class StatusEndpointIntegrationTest extends AbstractIntegrationTest {
 
         mockMvc.perform(get("/api/netmon/status").header("Authorization", bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.collectors[0].lastSuccessAt").value("2026-09-01T03:30:00Z"))
-                .andExpect(jsonPath("$.collectors[0].consecutiveFailures").value(2))
-                .andExpect(jsonPath("$.collectors[0].lastErrorCode").value("upstream"))
-                .andExpect(jsonPath("$.collectors[0].stale").value(true))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'retention')].lastSuccessAt").value("2026-09-01T03:30:00Z"))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'retention')].consecutiveFailures").value(2))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'retention')].lastErrorCode").value("upstream"))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'retention')].stale").value(true))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("upstream said no"))));
+    }
+
+    @Test
+    void nm1CollectorsAreListedByNameAndReputationIsDisabledWithoutAKey() throws Exception {
+        mockMvc.perform(get("/api/netmon/status").header("Authorization", bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.collectors[*].name", org.hamcrest.Matchers.contains(
+                        "blocklists", "cloudflare-firewall", "cloudflare-requests", "reputation", "retention")))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'reputation')].enabled").value(false))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'reputation')].stale").value(false))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'cloudflare-requests')].enabled").value(true));
     }
 
     @Test

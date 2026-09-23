@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** V1__netmon_baseline (docs/060 §3.1, §3.3, §3.4). */
+/** V1__netmon_baseline (docs/060 §3.1, §3.3, §3.4); V2 has its own test class. */
 class FlywayMigrationIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
@@ -27,11 +27,12 @@ class FlywayMigrationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void v1CreatesOnlyCollectorState() {
-        // NM-1..NM-4 tables arrive in V2..V5 (docs/060 §3.4), never in the baseline.
+    void netmonHoldsTheV1AndV2TablesOnly() {
+        // V1 = collector_state; V2 (NM-1) = the inbound tables; NM-2..NM-4 tables arrive in V3..V5 (docs/060 §3.4).
         List<String> tables = jdbc.sql("SELECT table_name FROM information_schema.tables WHERE table_schema = 'netmon'")
                 .query(String.class).list();
-        assertThat(tables).containsExactly("collector_state");
+        assertThat(tables).containsExactlyInAnyOrder("collector_state", "inbound_request_groups", "firewall_events",
+                "ip_enrichment", "blocklist_snapshots", "blocklist_entries");
     }
 
     @Test
