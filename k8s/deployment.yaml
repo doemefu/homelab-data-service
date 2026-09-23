@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-service
+  namespace: apps
+  labels:
+    app: data-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-service
+  template:
+    metadata:
+      labels:
+        app: data-service
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: data-service
+          # Image tag is managed by Flux CD image automation. The initial tag is a placeholder that
+          # was never built (same bootstrap as auth-service/device-service): Flux replaces it with
+          # the first main-<timestamp> tag once homelab#115 wires cluster/apps/data-service/.
+          image: ghcr.io/doemefu/homelab-data-service:main-20260923T000000 # {"$imagepolicy": "flux-system:data-service"}
+          ports:
+            - containerPort: 8082
+          env:
+            - name: DB_URL
+              value: "jdbc:postgresql://postgresql.apps.svc.cluster.local:5432/data_service"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: data-service-secrets
+                  key: db-username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: data-service-secrets
+                  key: db-password
+            - name: JWT_ISSUER
+              value: "https://auth.furchert.ch"
+            - name: JWKS_URI
+              value: "http://auth-service.apps.svc.cluster.local:8080/oauth2/jwks"
+            # docs/060 §9 baseline, except MaxMetaspaceSize: NM-0 alone measured ~56 MB of metaspace
+            # after startup and first requests (87% of the 64m baseline), so the cap is 96m.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xmx128m -XX:+UseSerialGC -XX:MaxMetaspaceSize=96m"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          # 60 x 5 s = 300 s startup budget, as for auth-service/device-service (Spring Boot start
+          # takes 65-95 s at 1 CPU on mba1 and >150 s at 0.5 CPU on the 4-core node).
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            failureThreshold: 60
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            periodSeconds: 5
+            failureThreshold: 3

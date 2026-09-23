@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+    assignees:
+      - "doemefu"
+    open-pull-requests-limit: 5
+    groups:
+      spring-stack:
+        patterns:
+          - "org.springframework.boot*"
+          - "org.springframework.security*"
+          - "org.springframework*"
+      testcontainers:
+        patterns:
+          - "org.testcontainers*"
+      observability:
+        patterns:
+          - "io.micrometer*"
+
+  # Actions are pinned by commit SHA with a version comment; Dependabot updates both.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # Base images are pinned by tag + index digest; Dependabot updates both.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
