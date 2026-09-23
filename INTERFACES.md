@@ -13,7 +13,7 @@ Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:80
 - `ROLE_ADMIN` is **not** accepted. User tokens with `role=ADMIN` are held by several SSO clients (grafana, n8n, litellm, Home Assistant), so accepting them would expose IP-level data to any of those apps.
 - Authorities: the auth-service converter pattern merges `SCOPE_*` (from `scope`) and `ROLE_*` (from `role`).
 
-The token is a client-credentials token of the existing `furchert-ch` client (needs doemefu/homelab-auth-service#93):
+The token is a client-credentials token of the existing `furchert-ch` client (provided by doemefu/homelab-auth-service PR #95, Flyway V6, live since 2026-09-23):
 
 ```
 POST http://auth-service.apps.svc.cluster.local:8080/oauth2/token

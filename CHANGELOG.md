@@ -19,7 +19,10 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - The freshness gauge is registered only for collectors that are enabled and able to succeed. A collector switched off, `reputation` without a key, or a Cloudflare collector without credentials therefore cannot trip `NetmonCollectorStale`.
 - `@EnableScheduling` moved to `SchedulingConfig` (`netmon.scheduling.enabled`, default `true`).
 
-- NM-0 bootstrap (#13, Epic doemefu/homelab#114): Spring Boot 4.1.1 / Java 25 service on port 8082.
+## [0.1.0] — 2026-09-23
+
+### Added
+- NM-0 bootstrap (#13, PR #18, Epic doemefu/homelab#114): Spring Boot 4.1.1 / Java 25 service on port 8082.
 - Flyway `V1__netmon_baseline`: schema `netmon` and table `netmon.collector_state` in DB `data_service` (history table `public.flyway_schema_history_data`).
 - JWT resource server against auth-service's JWKS with issuer validation. `/api/netmon/**` requires scope `netmon:read` and a `sub` in `netmon.api.allowed-clients` (default `furchert-ch`).
 - `GET /api/netmon/status`: collector freshness, `Cache-Control: no-store`, and RFC 9457 problem+json errors with a `code` member.
@@ -27,5 +30,5 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - Gauge `netmon_collector_last_success_timestamp_seconds{collector}` on `/actuator/prometheus`.
 - Multi-arch image `ghcr.io/doemefu/homelab-data-service`, CI, CodeQL, Dependabot, and `k8s/` manifests with the Flux image-policy marker.
 
-### Changed (NM-0)
+### Changed
 - README: the scope now follows ADR 0001/0002. Schedule CRUD belongs to device-service, and data-service is the analytical data plane.

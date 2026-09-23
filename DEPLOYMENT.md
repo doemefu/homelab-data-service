@@ -27,13 +27,13 @@ GitHub Actions `Build and Push` (`.github/workflows/build.yml`) runs on every pu
 
 No `latest` tag is published.
 
-## Bootstrap sequence (NM-0)
+## Bootstrap sequence (NM-0) — completed 2026-09-23
 
 `k8s/deployment.yaml` starts with the placeholder tag `main-20260923T000000`. That image was never built. auth-service and device-service were bootstrapped the same way: Flux image automation replaces the placeholder with the newest real tag and commits that change to `main`.
 
 1. **Owner:** add the SOPS variable `data_service_db_password` in the `homelab` repo.
-2. **Merge this PR** (#13). `Build and Push` publishes the first `main-<timestamp>` image.
-3. **Owner:** make the GHCR package `homelab-data-service` public, or enable the `ghcr-auth` `secretRef` in `cluster/apps/data-service/imagerepo.yaml`. New GHCR packages are private by default.
+2. **Merge PR #18** (issue #13). `Build and Push` publishes the first `main-<timestamp>` image.
+3. **Owner:** make the GHCR package `homelab-data-service` public. New GHCR packages are private by default. Keeping it private needs **two** credentials: `ghcr-auth` in `flux-system`, with the `secretRef` in `cluster/apps/data-service/imagerepo.yaml` enabled, only lets Flux scan tags. The pod also needs a docker-registry Secret in `apps`, referenced via `imagePullSecrets` in `k8s/deployment.yaml`, or the rollout ends in `ImagePullBackOff`. See the infrastructure repo's `DEPLOYMENT.md`, section "data-service (Flux, NM-0 onboarding)".
 4. **Owner:** create an SSH deploy key with **write** access on this repo and store its private half as Secret `data-service-flux-auth` in `flux-system`. Allow the Flux push to `main` in this repo's branch ruleset, as for the other service repos.
 5. **Merge homelab#126 and run playbook 59** (owner go). This creates the `data_service` role and DB and the `data-service-secrets` Secret. A second run must report 0 changes.
 6. Flux reconciles `cluster/apps/data-service/`. The GitRepository and Kustomization apply `k8s/`, and the pod briefly shows `ImagePullBackOff` on the placeholder tag. The ImagePolicy then picks the tag from step 2, and ImageUpdateAutomation commits `chore: update data-service image to …` to `main`. That commit does not trigger a rebuild because `k8s/**` is ignored.
@@ -76,7 +76,7 @@ kubectl -n apps exec postgresql-0 -c postgresql -- psql -U postgres -d data_serv
 
 kubectl -n apps port-forward svc/data-service 8082:8082 &
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8082/api/netmon/status              # 401
-# With a furchert-ch client-credentials token (needs homelab-auth-service#93); read the secret into
+# With a furchert-ch client-credentials token (provided by homelab-auth-service PR #95, Flyway V6, live since 2026-09-23); read the secret into
 # a variable without echoing it, and never paste tokens into logs or tickets:
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" localhost:8082/api/netmon/status   # 200
 ```
@@ -103,7 +103,7 @@ A token without `netmon:read` must get 403.
 | Startup fails with `FlywayValidateException` | A merged migration was edited, or migrations were merged out of order |
 | Every API call answers 500 `code=internal` | auth-service JWKS unreachable (`[auth] token validation unavailable` in the log) |
 | 401 for a fresh furchert-ch token | Wrong `JWT_ISSUER`, or the token was minted by another auth-service instance or key |
-| 403 for a furchert-ch token | Token lacks `netmon:read`: the client migration from homelab-auth-service#93 is not applied, or the scope was not requested |
+| 403 for a furchert-ch token | Token lacks `netmon:read`: the client migration from homelab-auth-service PR #95 (Flyway V6) is not applied, or the scope was not requested |
 | `/status`: `cloudflare-*` with `lastErrorCode=credentials` | `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID` empty (Secret keys missing, or pod not restarted after playbook 59), token revoked/expired, or the token lacks Analytics:Read (firewall events may also need Firewall Services:Read, §4.2) |
 | `/status`: `cloudflare-*` with `lastErrorCode=upstream` | Cloudflare 5xx/unreachable, or GraphQL `errors[]` — the WARN log line `[cloudflare] GraphQL errors: … first=…` names the problem (typically a field not available on the plan) |
 | `/status`: `lastErrorCode=rate_limited` | Cloudflare 429; runs back off exponentially up to 30 min |
