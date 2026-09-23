@@ -128,19 +128,9 @@ Further endpoints (`/lan/*`, `/egress/top`, `/logins/*`) arrive with NM-2..NM-4.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `netmon_collector_last_success_timestamp_seconds` | gauge | `collector` | Unix time of the collector's last successful run; **NaN until the first success** (§4.1). Registered at startup for every collector that can run; a collector whose kill switch is off or that lacks configuration (`reputation` without a key) exports no series. |
+| `netmon_collector_last_success_timestamp_seconds` | gauge | `collector` | Unix time of the collector's last successful run; **NaN until the first success** (§4.1). Registered at startup only for collectors that are enabled and able to succeed. No series is exported for a collector whose kill switch is off, for `reputation` without `ABUSEIPDB_API_KEY`, or for `cloudflare-requests`/`cloudflare-firewall` started without `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID`. Those two still run and report `credentials` in `/status`. |
 
-The `NetmonCollectorStale` rule (infra-owned, doemefu/homelab#116) alerts when the gauge is older than 3 × the cadence and treats NaN as "never succeeded". One expression per cadence, for example:
-
-```promql
-# 5-minute collectors: stale after 15 min; NaN (never succeeded) fires too (NaN != NaN).
-(time() - netmon_collector_last_success_timestamp_seconds{collector=~"cloudflare-requests|cloudflare-firewall"} > 900)
-  or (netmon_collector_last_success_timestamp_seconds{collector=~"cloudflare-requests|cloudflare-firewall"}
-      != netmon_collector_last_success_timestamp_seconds{collector=~"cloudflare-requests|cloudflare-firewall"})
-# Daily collectors (blocklists, retention): > 259200 (3 d). reputation (30 min): > 5400.
-```
-
-Use a `for:` of at least one cadence so a pod restart (NaN until the first run) does not page.
+The `NetmonCollectorStale` rule is owned by the infra repo (doemefu/homelab#116, PR #131). It treats a NaN sample as "never succeeded" once `process_start_time_seconds` is older than the collector's threshold. The thresholds are 26 h for `blocklists`/`retention`, 90 min for `reputation`, and 15 min for the 5-minute collectors `cloudflare-requests`/`cloudflare-firewall`. Because unconfigured collectors export no series, the rule never fires for a collector that is off on purpose.
 
 ## 3. Consumed
 

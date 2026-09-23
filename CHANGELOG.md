@@ -16,7 +16,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - `k8s/deployment.yaml`: `CLOUDFLARE_GRAPHQL_URL`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `ABUSEIPDB_API_KEY` (Secret keys `optional: true`).
 
 ### Changed
-- The freshness gauge is registered only for collectors that can run (kill switch on and configured), so a deliberately disabled collector cannot trip `NetmonCollectorStale`.
+- The freshness gauge is registered only for collectors that are enabled and able to succeed. A collector switched off, `reputation` without a key, or a Cloudflare collector without credentials therefore cannot trip `NetmonCollectorStale`.
 - `@EnableScheduling` moved to `SchedulingConfig` (`netmon.scheduling.enabled`, default `true`).
 
 - NM-0 bootstrap (#13, Epic doemefu/homelab#114): Spring Boot 4.1.1 / Java 25 service on port 8082.

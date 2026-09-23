@@ -25,6 +25,17 @@ public interface NetmonCollector {
     }
 
     /**
+     * Whether {@code netmon_collector_last_success_timestamp_seconds} is registered at startup. {@code false}
+     * for a collector that runs but cannot succeed with the configuration it started with (e.g. Cloudflare
+     * without token/zone id): it still reports {@code credentials} in {@code /status}, but a permanently NaN
+     * gauge would make {@code NetmonCollectorStale} fire forever. Env vars only change with a restart, so the
+     * startup decision holds for the pod's lifetime.
+     */
+    default boolean exportsFreshnessGauge() {
+        return true;
+    }
+
+    /**
      * Performs one run. Throw {@link CollectorException} with a safe, self-authored message for
      * expected failures; any other exception is recorded as {@code internal} by class name only.
      */

@@ -76,6 +76,12 @@ public class InboundRequestsCollector implements NetmonCollector {
         return Duration.ofMinutes(5);
     }
 
+    /** Without token/zone id every run fails with {@code credentials}; no NaN-forever gauge (see interface). */
+    @Override
+    public boolean exportsFreshnessGauge() {
+        return properties.hasCredentials();
+    }
+
     @Override
     public void collect() {
         Instant now = clock.instant().truncatedTo(ChronoUnit.SECONDS);
