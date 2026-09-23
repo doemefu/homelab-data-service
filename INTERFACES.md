@@ -38,28 +38,82 @@ RFC 9457 `application/problem+json` with `type` (`about:blank`), `title`, `statu
 
 | Status | `code` | When |
 |---|---|---|
-| 400, 405, 406, 415 | `invalid_parameter` | Malformed request (NM-1+ adds `invalid_window` for bad `from`/`to`) |
+| 400 | `invalid_window` | `from`/`to` not ISO-8601 instants, or `to - from` not in (0, 30 d] |
+| 400, 405, 406, 415 | `invalid_parameter` | Malformed request: `limit` out of range, malformed `ip` or `cursor`, wrong method or media type |
 | 401 | `unauthorized` | Missing, malformed, expired, wrongly signed or wrong-issuer token; also carries `WWW-Authenticate: Bearer …` |
 | 403 | `forbidden` | Valid token without `netmon:read` or with a `sub` outside the allowlist |
-| 404 | `not_found` | Unknown path (and, from NM-1, an unknown IP) |
+| 404 | `not_found` | Unknown path, or `GET /ips/{ip}` for an IP never seen |
 | 500 | `internal` | Unexpected error, or token validation impossible because auth-service's JWKS is unreachable |
 
 `detail` is a fixed text; it never echoes a token, an exception message or a stack trace.
 
 ### `GET /api/netmon/status` (§7.2)
 
-Collector freshness for the UI's honest-fallback banner. One element per registered collector, sorted by name. NM-0 registers only `retention`.
+Collector freshness for the UI's honest-fallback banner. One element per registered collector, sorted by name: `blocklists`, `cloudflare-firewall`, `cloudflare-requests`, `reputation`, `retention`.
 
 ```json
-{ "collectors": [ { "name": "retention", "enabled": true, "lastSuccessAt": null, "lastWindowEnd": null,
-                    "consecutiveFailures": 0, "lastErrorCode": null, "stale": false } ] }
+{ "collectors": [ { "name": "cloudflare-requests", "enabled": true, "lastSuccessAt": "2026-09-23T10:30:02Z",
+                    "lastWindowEnd": "2026-09-23T10:00:00Z", "consecutiveFailures": 0, "lastErrorCode": null,
+                    "stale": false } ] }
 ```
 
-- `enabled` reflects the kill switch `netmon.collectors.<name>.enabled` (default `true`).
-- `lastErrorCode` is `null`, `credentials`, `rate_limited`, `upstream`, `truncated` or `internal`; never a message.
+- `enabled` reflects the kill switch `netmon.collectors.<name>.enabled` (default `true`). It is also `false` for a collector that lacks required configuration: `reputation` while `ABUSEIPDB_API_KEY` is unset.
+- `lastErrorCode` is `null`, `credentials`, `rate_limited`, `upstream`, `truncated` or `internal`; never a message. `truncated` is a warning on a successful run (a window exceeded the Cloudflare page limit), so it can appear with `consecutiveFailures: 0`.
+- `lastWindowEnd` is the collector's high-water mark: for `cloudflare-requests` the end of the newest contiguous final hour, for `cloudflare-firewall` the `until` of the last complete run.
 - `stale` is `true` when the last success is older than 3 × the collector's cadence. Before the first success, the service start time is the reference, so a new deployment is not stale before a collector could have run. A disabled collector is never stale.
 
-Further endpoints (`/inbound/*`, `/ips/{ip}`, `/lan/*`, `/egress/top`, `/logins/*`) arrive with NM-1..NM-4.
+### `GET /api/netmon/inbound/summary?from&to&host&limit` (§7.2)
+
+Aggregates of `inbound_request_groups` over the window (overlap filter `window_start < to AND window_end > from`), optionally for one `host`. `limit` sizes every top list (default 10, max 50). Default window: the last 24 h.
+
+```json
+{ "window": {"from": "2026-09-23T00:00:00Z", "to": "2026-09-24T00:00:00Z"},
+  "totals": {"requests": 132, "uniqueClientIps": 2, "sampled": true},
+  "topClientIps": [ {"ip": "203.0.113.7", "requests": 125, "country": "DE", "asn": 3320, "asnOrg": "DTAG",
+                     "blocklisted": false, "abuseScore": 12, "firewallEvents": 0} ],
+  "topCountries": [ {"country": "DE", "requests": 125} ],
+  "topAsns":      [ {"asn": 3320, "asnOrg": "DTAG", "requests": 125} ],
+  "topHosts":     [ {"host": "furchert.ch", "requests": 125} ],
+  "topPaths":     [ {"host": "furchert.ch", "path": "/de", "requests": 120} ],
+  "statuses":     [ {"status": 200, "requests": 120} ],
+  "timeline":     [ {"bucketStart": "2026-09-23T08:00:00Z", "requests": 132} ] }
+```
+
+- `sampled` is `true` if any contributing row had Cloudflare `sampleInterval > 1` (the UI shows "≈").
+- `timeline` buckets are 1 h up to a 7-day window, otherwise 1 d (UTC); only buckets with data are listed. `statuses` lists every status, ascending.
+- `topClientIps[].country/asn/asnOrg/blocklisted/abuseScore` come from `ip_enrichment`; `firewallEvents` counts that IP's firewall events in `[from, to)`.
+
+### `GET /api/netmon/inbound/firewall-events?from&to&action&host&ip&limit&cursor` (§7.2)
+
+Raw Cloudflare firewall events in `[from, to)`, newest first (`occurredAt`, then insertion order). `limit` default 50, max 500. `nextCursor` is an opaque string to pass back as `cursor`, or `null` on the last page.
+
+```json
+{ "items": [ {"occurredAt": "2026-09-23T08:30:00Z", "rayName": "8c1…", "clientIp": "198.51.100.9", "country": "US",
+              "asn": 14061, "asnOrg": "DIGITALOCEAN", "action": "block", "securitySource": "firewallManaged",
+              "ruleId": "rule-1", "host": "auth.furchert.ch", "method": "POST", "path": "/login",
+              "userAgent": "curl/8.0", "blocklisted": true} ],
+  "nextCursor": null }
+```
+
+### `GET /api/netmon/ips/{ip}?from&to` (§7.2)
+
+Everything known about one IP. Default window **7 d**. A malformed `ip` is 400 `invalid_parameter` (only literals are accepted, never hostnames); an IP never seen is 404 `not_found`. Non-public addresses are never enriched, so they are always 404 here.
+
+```json
+{ "ip": "198.51.100.9", "firstSeen": "2026-09-23T08:00:00Z", "lastSeen": "2026-09-23T09:00:00Z",
+  "seenIn": ["firewall", "inbound"], "country": "US", "asn": 14061, "asnOrg": "DIGITALOCEAN",
+  "blocklists": [ {"list": "firehol-level1", "cidr": "198.51.100.0/24", "fetchedAt": "2026-09-23T05:00:00Z"} ],
+  "abuseIpDb": null,
+  "inbound": {"requests": 7, "topHosts": [], "topPaths": [], "statuses": []},
+  "firewallEvents": [],
+  "logins": null, "lan": null }
+```
+
+- `abuseIpDb` is `{score, reports, checkedAt}` or `null` if never checked.
+- `firewallEvents` holds the last 20 events of the window in the firewall-events item shape.
+- `logins` (NM-4) and `lan` (NM-3) are `null` until those sub-projects ship.
+
+Further endpoints (`/lan/*`, `/egress/top`, `/logins/*`) arrive with NM-2..NM-4.
 
 ## 2. Exposed: actuator
 
@@ -74,9 +128,19 @@ Further endpoints (`/inbound/*`, `/ips/{ip}`, `/lan/*`, `/egress/top`, `/logins/
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `netmon_collector_last_success_timestamp_seconds` | gauge | `collector` | Unix time of the collector's last successful run; **NaN until the first success** (§4.1). Registered for every collector at startup. |
+| `netmon_collector_last_success_timestamp_seconds` | gauge | `collector` | Unix time of the collector's last successful run; **NaN until the first success** (§4.1). Registered at startup for every collector that can run; a collector whose kill switch is off or that lacks configuration (`reputation` without a key) exports no series. |
 
-A `NetmonCollectorStale` rule (infra-owned) should alert on `time() - netmon_collector_last_success_timestamp_seconds > 3 × cadence` and treat NaN as "never succeeded" (for example with an additional `absent`/NaN check once the collector is expected to have run).
+The `NetmonCollectorStale` rule (infra-owned, doemefu/homelab#116) alerts when the gauge is older than 3 × the cadence and treats NaN as "never succeeded". One expression per cadence, for example:
+
+```promql
+# 5-minute collectors: stale after 15 min; NaN (never succeeded) fires too (NaN != NaN).
+(time() - netmon_collector_last_success_timestamp_seconds{collector=~"cloudflare-requests|cloudflare-firewall"} > 900)
+  or (netmon_collector_last_success_timestamp_seconds{collector=~"cloudflare-requests|cloudflare-firewall"}
+      != netmon_collector_last_success_timestamp_seconds{collector=~"cloudflare-requests|cloudflare-firewall"})
+# Daily collectors (blocklists, retention): > 259200 (3 d). reputation (30 min): > 5400.
+```
+
+Use a `for:` of at least one cadence so a pod restart (NaN until the first run) does not page.
 
 ## 3. Consumed
 
@@ -84,8 +148,12 @@ A `NetmonCollectorStale` rule (infra-owned) should alert on `time() - netmon_col
 |---|---|---|
 | PostgreSQL | `postgresql.apps.svc.cluster.local:5432`, DB `data_service`, role `data_service` | The netmon store; Flyway migrations on startup |
 | auth-service JWKS | `http://auth-service.apps.svc.cluster.local:8080/oauth2/jwks` | Token signature keys (fetched on the first request, then cached) |
+| Cloudflare GraphQL Analytics | `https://api.cloudflare.com/client/v4/graphql` (`api.cloudflare.com:443`) | `cloudflare-requests` (query A, `httpRequestsAdaptiveGroups`, every 5 min at :00) and `cloudflare-firewall` (query B, `firewallEventsAdaptive`, every 5 min at :30) for zone `CLOUDFLARE_ZONE_ID`, `Authorization: Bearer $CLOUDFLARE_API_TOKEN` (§4.2). Normal load 3 queries per 5 min, capped at 60 per run during catch-up. |
+| Spamhaus DROP v4 | `https://www.spamhaus.org/drop/drop_v4.json` (`www.spamhaus.org:443`) | `blocklists`, daily 05:00 UTC. NDJSON; Spamhaus sends no ETag, so `unchanged` is detected by sha256. |
+| FireHOL level1 | `https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset` (`raw.githubusercontent.com:443`) | `blocklists`, daily 05:00 UTC, `If-None-Match` with the stored ETag. Private/bogon ranges in the list are dropped. |
+| AbuseIPDB | `https://api.abuseipdb.com/api/v2/check` (`api.abuseipdb.com:443`) | `reputation`, every 30 min, **only when `ABUSEIPDB_API_KEY` is set** (not yet). ≤ 10 checks per run, ≤ 200 per UTC day; only public, non-blocklisted IPs that crossed a §4.5 threshold. |
 
-NM-1..NM-4 add Prometheus, Cloudflare GraphQL, the blocklists, AbuseIPDB and auth-service's login-event endpoint (§2, §10).
+These four are data-service's only outbound destinations outside the cluster (§10); blocklists are fetched only by data-service. NM-2..NM-4 add Prometheus and auth-service's login-event endpoint.
 
 ## 4. Database ownership (§3)
 
@@ -93,6 +161,11 @@ NM-1..NM-4 add Prometheus, Cloudflare GraphQL, the blocklists, AbuseIPDB and aut
 |---|---|---|
 | Schema `netmon` | data-service | Created by Flyway |
 | `netmon.collector_state` | data-service | V1. One row per collector: high-water mark, cursor, attempt/success times, failure counter, `last_error` (class + short collector-authored message) and `last_error_code` (the §7.2 enum, enforced by a CHECK) |
+| `netmon.inbound_request_groups` | data-service | V2. Cloudflare request groups per hour; replaced per window, `is_final` once re-collected ≥ 15 min after the hour. Retention 90 d. |
+| `netmon.firewall_events` | data-service | V2. Raw Cloudflare firewall events; natural key `(ray_name, security_source, coalesce(rule_id,''), action)`. Retention 180 d. |
+| `netmon.ip_enrichment` | data-service | V2. One row per public IP: first/last seen, `seen_in`, Cloudflare geo/ASN, blocklist hits, AbuseIPDB score. Deleted 180 d after `last_seen`. |
+| `netmon.blocklist_snapshots` | data-service | V2. One row per fetch (`applied`/`unchanged`/`failed`). Retention 30 d, except snapshots still referenced by current entries. |
+| `netmon.blocklist_entries` | data-service | V2. Current CIDRs per list; replaced per list only after a successful parse. No retention. |
 | `public.flyway_schema_history_data` | data-service | Flyway history |
 
 No other service reads or writes this database.
@@ -107,10 +180,24 @@ No other service reads or writes this database.
 | `JWKS_URI` | `http://localhost:8080/oauth2/jwks` | auth-service JWKS |
 | `JWT_ISSUER` | `https://auth.furchert.ch` | Expected `iss` |
 | `JAVA_TOOL_OPTIONS` | — | JVM flags (set in `k8s/deployment.yaml`) |
+| `CLOUDFLARE_GRAPHQL_URL` | `https://api.cloudflare.com/client/v4/graphql` | GraphQL endpoint |
+| `CLOUDFLARE_API_TOKEN` | empty | Analytics:Read token for zone furchert.ch. Empty = the Cloudflare collectors fail with `credentials` |
+| `CLOUDFLARE_ZONE_ID` | empty | Zone tag. Empty = as above |
+| `ABUSEIPDB_API_KEY` | empty | Empty = `reputation` disabled |
 
 | Property | Default | Purpose |
 |---|---|---|
 | `netmon.api.allowed-clients` | `[furchert-ch]` | Token `sub` values allowed on `/api/netmon/**` |
 | `netmon.collectors.<name>.enabled` | `true` | Per-collector kill switch |
+| `netmon.cloudflare.groups-page-size` / `firewall-page-size` | `5000` / `1000` | `limit` of queries A/B; lower them if the plan's `maxPageSize` is smaller |
+| `netmon.cloudflare.firewall-max-pages` | `20` | Firewall pages per run |
+| `netmon.cloudflare.max-queries-per-run` | `60` | Catch-up throttle for `cloudflare-requests` |
+| `netmon.blocklists.spamhaus-drop-v4-url` / `firehol-level1-url` | the §4.4 URLs | Blocklist sources |
+| `netmon.abuseipdb.daily-budget` / `per-run` | `200` / `10` | AbuseIPDB check budget |
+| `netmon.retention.inbound-request-groups-days` | `90` | Retention (values < 1 fail startup) |
+| `netmon.retention.firewall-events-days` | `180` | Retention |
+| `netmon.retention.ip-enrichment-days` | `180` | Retention on `last_seen` |
+| `netmon.retention.blocklist-snapshots-days` | `30` | Retention (referenced snapshots are kept) |
+| `netmon.scheduling.enabled` | `true` | Turns every `@Scheduled` trigger off (the test suite sets `false`) |
 
-Kubernetes Secret `data-service-secrets` (ns `apps`, created by the `homelab` repo's playbook 59): keys `db-username`, `db-password`. NM-1 adds `cloudflare-api-token`, `cloudflare-zone-id` and optionally `abuseipdb-api-key`; NM-4 adds `auth-client-secret` (§9).
+Kubernetes Secret `data-service-secrets` (ns `apps`, created by the `homelab` repo's playbook 59): keys `db-username`, `db-password`; NM-1 reads `cloudflare-api-token` → `CLOUDFLARE_API_TOKEN`, `cloudflare-zone-id` → `CLOUDFLARE_ZONE_ID` (both added by doemefu/homelab#116) and `abuseipdb-api-key` → `ABUSEIPDB_API_KEY` (only once the owner approves a key). All three `secretKeyRef`s are `optional: true`. NM-4 adds `auth-client-secret` (§9).

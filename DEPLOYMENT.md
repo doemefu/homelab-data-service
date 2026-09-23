@@ -6,7 +6,7 @@ data-service runs in namespace `apps` of the homelab k3s cluster and is deployed
 
 | File | Content |
 |---|---|
-| `deployment.yaml` | `data-service`, `replicas: 1`, `automountServiceAccountToken: false`, port 8082, env from `data-service-secrets`, requests `100m`/`256Mi`, limits `1000m`/`512Mi`, startup/liveness/readiness on `/actuator/health` (300 s startup budget), Flux marker `# {"$imagepolicy": "flux-system:data-service"}` |
+| `deployment.yaml` | `data-service`, `replicas: 1`, `automountServiceAccountToken: false`, port 8082, env from `data-service-secrets` (DB keys required; Cloudflare/AbuseIPDB keys `optional: true`), requests `100m`/`256Mi`, limits `1000m`/`512Mi`, startup/liveness/readiness on `/actuator/health` (300 s startup budget), Flux marker `# {"$imagepolicy": "flux-system:data-service"}` |
 | `service.yaml` | ClusterIP `data-service:8082` (port name `http`) |
 | `kustomization.yaml` | Lists both; this is the path (`./k8s`) that Flux syncs and updates |
 
@@ -40,6 +40,31 @@ No `latest` tag is published.
 7. The pod starts and Flyway applies `V1__netmon_baseline`.
 
 Steps 1, 3, 4 and 5 are owner actions (secrets, cluster mutations, merges). No automation in this repo performs them.
+
+## NM-1 rollout (#14): Cloudflare inbound, blocklists, enrichment
+
+NM-1 adds four collectors and the migration `V2__netmon_inbound` (five tables, additive). Merge order across repos (docs/060 §11): **doemefu/homelab#116 → this repo's #14 PR → doemefu/furchert-ch#61**.
+
+1. **Merge gate — Cloudflare field probe (§4.2).** The owner runs the `settings` probe query against zone furchert.ch and records `availableFields` / `maxPageSize` for `httpRequestsAdaptiveGroups` and `firewallEventsAdaptive`. The collectors query `clientIP`, `clientCountryName`, `clientAsn`, `clientASNDescription`, `clientRequestHTTPHost`, `clientRequestHTTPMethodName`, `clientRequestPath`, `edgeResponseStatus`, `avg.sampleInterval`, and for firewall events also `datetime rayName action source ruleId userAgent`. A field missing on the Free plan makes every run fail with `upstream` (GraphQL `errors[]`) until it is dropped from the query; `clientIP` missing stops NM-1 (back to the architect). If `maxPageSize` is below 5000/1000, set `netmon.cloudflare.groups-page-size` / `firewall-page-size`.
+2. **Owner:** merge homelab#116 and run playbook 59. It adds the Secret keys `cloudflare-api-token` and `cloudflare-zone-id` to `data-service-secrets` (SOPS vars `data_service_cloudflare_analytics_token`, `data_service_cloudflare_zone_id`), plus the ServiceMonitor and the `NetmonCollectorStale` rule.
+3. **Merge this PR.** Flux rolls out the new image; Flyway applies V2 on startup.
+4. The env vars use `optional: true`. If step 2 has not run yet, the pod still starts; `cloudflare-requests` and `cloudflare-firewall` then fail every run with `lastErrorCode=credentials` in `/api/netmon/status` and never call out. A running pod does not see Secret changes in env vars: after playbook 59 adds the keys, restart it once (`kubectl -n apps rollout restart deploy/data-service`, owner go).
+5. `reputation` (AbuseIPDB) stays disabled (`enabled=false`, no gauge) until the owner approves a key and adds `abuseipdb-api-key` to the Secret.
+
+### Verification (§11 NM-1)
+
+```bash
+kubectl -n apps logs deploy/data-service | grep -E 'Migrating schema .* to version "2|\[cloudflare-|\[blocklists\]'
+PSQL='kubectl -n apps exec postgresql-0 -c postgresql -- psql -U postgres -d data_service -c'
+$PSQL "select version, success from public.flyway_schema_history_data order by installed_rank"     # 1 and 2
+$PSQL "select window_start, is_final, count(*), sum(request_count) from netmon.inbound_request_groups group by 1,2 order by 1 desc limit 5"
+$PSQL "select count(*) from netmon.firewall_events"            # run twice 5+ min apart: stable unless new events
+$PSQL "select list_name, outcome, entry_count, fetched_at from netmon.blocklist_snapshots order by fetched_at desc limit 4"
+$PSQL "select count(*) from netmon.ip_enrichment where blocklisted and (ip << '10.0.0.0/8' or ip << '172.16.0.0/12' or ip << '192.168.0.0/16')"   # 0
+$PSQL "select collector, last_success_at, last_window_end, consecutive_failures, last_error_code from netmon.collector_state"
+```
+
+The first blocklist refresh runs at the next 05:00 UTC. There is no manual trigger in v1 (§7.3), so the blocklist checks above pass only after that run.
 
 ## Verification (§11 NM-0)
 
@@ -79,3 +104,8 @@ A token without `netmon:read` must get 403.
 | Every API call answers 500 `code=internal` | auth-service JWKS unreachable (`[auth] token validation unavailable` in the log) |
 | 401 for a fresh furchert-ch token | Wrong `JWT_ISSUER`, or the token was minted by another auth-service instance or key |
 | 403 for a furchert-ch token | Token lacks `netmon:read`: the client migration from homelab-auth-service#93 is not applied, or the scope was not requested |
+| `/status`: `cloudflare-*` with `lastErrorCode=credentials` | `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID` empty (Secret keys missing, or pod not restarted after playbook 59), token revoked/expired, or the token lacks Analytics:Read (firewall events may also need Firewall Services:Read, §4.2) |
+| `/status`: `cloudflare-*` with `lastErrorCode=upstream` | Cloudflare 5xx/unreachable, or GraphQL `errors[]` — the WARN log line `[cloudflare] GraphQL errors: … first=…` names the problem (typically a field not available on the plan) |
+| `/status`: `lastErrorCode=rate_limited` | Cloudflare 429; runs back off exponentially up to 30 min |
+| `/status`: `lastErrorCode=truncated` with 0 failures | A 5-minute slice or a firewall page hit the page limit; data was written, the window may be incomplete |
+| `/status`: `blocklists` with `upstream` | One list failed to download or parse; see `netmon.blocklist_snapshots.error`. The previous entries stay active |
