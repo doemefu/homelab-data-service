@@ -21,10 +21,8 @@ class MetricsIntegrationTest extends AbstractIntegrationTest {
         mockMvc.perform(get("/actuator/prometheus"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("netmon_collector_last_success_timestamp_seconds{collector=\"retention\"")))
-                // The test context has no Cloudflare token/zone id: the collectors run (and report `credentials`)
-                // but export no permanently-NaN gauge.
-                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("collector=\"cloudflare-requests\""))))
-                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("collector=\"cloudflare-firewall\""))))
+                // Startup registration rules (disabled / unavailable / unconfigured) are unit-tested in
+                // CollectorMetricsInitializerTest; this shared context also runs collectors in other test classes.
                 .andExpect(content().string(containsString("netmon_collector_last_success_timestamp_seconds{collector=\"blocklists\"")))
                 // reputation cannot run without an AbuseIPDB key, so it exports no (permanently NaN) gauge.
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("collector=\"reputation\""))))
