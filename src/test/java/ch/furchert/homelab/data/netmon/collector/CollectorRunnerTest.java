@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -21,6 +22,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class CollectorRunnerTest {
 
@@ -131,5 +133,87 @@ class CollectorRunnerTest {
 
         assertThat(second).isFalse();
         verify(repository).recordAttempt("demo", NOW); // exactly once: the second run never started
+    }
+
+    @Test
+    void warningCountsAsSuccessButKeepsTheCode() {
+        boolean ran = runner(Map.of()).run(collector("demo", () -> {
+            throw new CollectorWarning(ErrorCode.TRUNCATED, "slice exceeded the page limit");
+        }));
+
+        assertThat(ran).isTrue();
+        verify(repository).recordSuccess("demo", NOW, ErrorCode.TRUNCATED, "CollectorWarning: slice exceeded the page limit");
+        verify(repository, never()).recordFailure(anyString(), any(), anyString());
+        assertThat(registry.get("netmon.collector.last.success.timestamp").tag("collector", "demo").gauge().value())
+                .isEqualTo(NOW.getEpochSecond());
+    }
+
+    @Test
+    void unavailableCollectorIsSkippedLikeADisabledOne() {
+        NetmonCollector unavailable = new NetmonCollector() {
+            @Override
+            public String name() {
+                return "demo";
+            }
+
+            @Override
+            public Duration cadence() {
+                return Duration.ofMinutes(5);
+            }
+
+            @Override
+            public boolean available() {
+                return false;
+            }
+
+            @Override
+            public void collect() {
+                throw new AssertionError("must not run");
+            }
+        };
+
+        assertThat(runner(Map.of()).run(unavailable)).isFalse();
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    void backoffGrowsExponentiallyUpTo30Minutes() {
+        Duration five = Duration.ofMinutes(5);
+        assertThat(CollectorRunner.backoff(five, 1)).isEqualTo(Duration.ofMinutes(5));
+        assertThat(CollectorRunner.backoff(five, 2)).isEqualTo(Duration.ofMinutes(10));
+        assertThat(CollectorRunner.backoff(five, 3)).isEqualTo(Duration.ofMinutes(20));
+        assertThat(CollectorRunner.backoff(five, 4)).isEqualTo(Duration.ofMinutes(30));
+        assertThat(CollectorRunner.backoff(five, 400)).isEqualTo(Duration.ofMinutes(30));
+        assertThat(CollectorRunner.backoff(Duration.ofDays(1), 1)).isEqualTo(Duration.ofMinutes(30));
+    }
+
+    @Test
+    void upstreamFailuresBackOffBetweenRuns() {
+        // Two consecutive upstream failures, the last attempt 5 min ago: backoff is 10 min, so skip.
+        when(repository.find("demo")).thenReturn(Optional.of(new CollectorState("demo", null, null,
+                NOW.minus(Duration.ofMinutes(5)), null, 2, "CollectorException: HTTP 503", "upstream")));
+        AtomicBoolean called = new AtomicBoolean();
+
+        assertThat(runner(Map.of()).run(collector("demo", () -> called.set(true)))).isFalse();
+        assertThat(called).isFalse();
+        verify(repository, never()).recordAttempt(anyString(), any());
+    }
+
+    @Test
+    void firstFailureKeepsTheNormalCadence() {
+        when(repository.find("demo")).thenReturn(Optional.of(new CollectorState("demo", null, null,
+                NOW.minus(Duration.ofMinutes(5)).plusSeconds(2), null, 1, "CollectorException: HTTP 429", "rate_limited")));
+
+        assertThat(runner(Map.of()).run(collector("demo", () -> {
+        }))).isTrue();
+    }
+
+    @Test
+    void credentialFailuresDoNotBackOff() {
+        when(repository.find("demo")).thenReturn(Optional.of(new CollectorState("demo", null, null,
+                NOW.minus(Duration.ofMinutes(5)), null, 9, "CollectorException: HTTP 401", "credentials")));
+
+        assertThat(runner(Map.of()).run(collector("demo", () -> {
+        }))).isTrue();
     }
 }

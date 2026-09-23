@@ -49,7 +49,7 @@ public class CollectorStatusService {
     }
 
     private CollectorStatus toStatus(NetmonCollector collector, CollectorState state, Instant now) {
-        boolean enabled = properties.isEnabled(collector.name());
+        boolean enabled = properties.isEnabled(collector.name()) && collector.available();
         Instant lastSuccess = state == null ? null : state.lastSuccessAt();
         Instant reference = lastSuccess != null ? lastSuccess : startedAt;
         boolean stale = enabled

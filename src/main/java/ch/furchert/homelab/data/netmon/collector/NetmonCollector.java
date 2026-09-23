@@ -16,6 +16,15 @@ public interface NetmonCollector {
     Duration cadence();
 
     /**
+     * {@code false} when the collector lacks required configuration and must not run at all (e.g.
+     * {@code reputation} without an AbuseIPDB key, docs/060 §4.5). Such a collector is treated like one
+     * whose kill switch is off: it is skipped and reported as {@code enabled=false}, never as stale.
+     */
+    default boolean available() {
+        return true;
+    }
+
+    /**
      * Performs one run. Throw {@link CollectorException} with a safe, self-authored message for
      * expected failures; any other exception is recorded as {@code internal} by class name only.
      */

@@ -6,6 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
@@ -15,12 +17,18 @@ import java.util.concurrent.locks.ReentrantLock;
  * ({@code netmon.collectors.<name>.enabled}), no overlap (in-JVM {@link ReentrantLock#tryLock()};
  * data-service runs a single replica and every write is idempotent), and the failure rule (state
  * keeps its high-water mark, {@code consecutive_failures} increments, {@code last_error} is set).
+ * After {@code rate_limited}/{@code upstream} failures, runs are spaced by an exponential backoff of
+ * {@code min(cadence * 2^(failures-1), 30 min)}; a {@link CollectorWarning} counts as a success whose
+ * code and message are kept for the status API.
  */
 @Component
 public class CollectorRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CollectorRunner.class);
     static final int MAX_ERROR_MESSAGE_LENGTH = 200;
+    static final Duration MAX_BACKOFF = Duration.ofMinutes(30);
+    /** Cron fires at the exact cadence while the attempt is stamped a little later; tolerate that. */
+    static final Duration BACKOFF_TOLERANCE = Duration.ofSeconds(30);
 
     private final CollectorStateRepository repository;
     private final NetmonProperties properties;
@@ -42,7 +50,7 @@ public class CollectorRunner {
      */
     public boolean run(NetmonCollector collector) {
         String name = collector.name();
-        if (!properties.isEnabled(name)) {
+        if (!properties.isEnabled(name) || !collector.available()) {
             log.debug("[{}] disabled, skipped", name);
             return false;
         }
@@ -52,9 +60,21 @@ public class CollectorRunner {
             return false;
         }
         try {
-            repository.recordAttempt(name, clock.instant());
+            Instant now = clock.instant();
+            if (inBackoff(collector, now)) {
+                log.info("[{}] backing off after upstream failures, skipped", name);
+                return false;
+            }
+            repository.recordAttempt(name, now);
             try {
                 collector.collect();
+            } catch (CollectorWarning w) {
+                Instant finishedAt = clock.instant();
+                String warning = describe(w);
+                repository.recordSuccess(name, finishedAt, w.code(), warning);
+                metrics.markSuccess(name, finishedAt);
+                log.warn("[{}] run completed with warning: code={} warning={}", name, w.code().value(), warning);
+                return true;
             } catch (Exception e) {
                 ErrorCode code = e instanceof CollectorException ce ? ce.code() : ErrorCode.INTERNAL;
                 String error = describe(e);
@@ -69,6 +89,24 @@ public class CollectorRunner {
         } finally {
             lock.unlock();
         }
+    }
+
+    private boolean inBackoff(NetmonCollector collector, Instant now) {
+        CollectorState state = repository.find(collector.name()).orElse(null);
+        if (state == null || state.consecutiveFailures() == 0 || state.lastAttemptAt() == null
+                || !(ErrorCode.RATE_LIMITED.value().equals(state.lastErrorCode())
+                || ErrorCode.UPSTREAM.value().equals(state.lastErrorCode()))) {
+            return false;
+        }
+        Duration backoff = backoff(collector.cadence(), state.consecutiveFailures());
+        return now.isBefore(state.lastAttemptAt().plus(backoff).minus(BACKOFF_TOLERANCE));
+    }
+
+    /** {@code min(cadence * 2^(failures-1), 30 min)}; the first failure keeps the normal cadence. */
+    static Duration backoff(Duration cadence, int failures) {
+        int exponent = Math.min(Math.max(failures - 1, 0), 16);
+        Duration backoff = cadence.multipliedBy(1L << exponent);
+        return backoff.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : backoff;
     }
 
     /**
