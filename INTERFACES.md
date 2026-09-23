@@ -1,6 +1,6 @@
 # Interfaces — homelab-data-service
 
-The binding contract is `docs/060-network-monitoring.md` in the `homelab` repo ([link](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md)). This file summarises what the current code implements. Section numbers (§) refer to that spec.
+The binding contract is `docs/060-network-monitoring.md` in the `homelab` repo ([link](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md), added by doemefu/homelab#126). This file summarises what the current code implements. Section numbers (§) refer to that spec.
 
 ## 1. Exposed: netmon read API
 

@@ -32,7 +32,7 @@ After writing the plan markdown, Claude MUST:
 ## Phase 3 — review
 Review the plan for defects (secret exposure, missing handlers, version pinning).
 - **Invoke the `plan-reviewer` subagent** on the plan before proceeding to implement.
-- Apply findings directly by updating the plan in the worklog.
+- Apply findings directly by updating the plan in `## 2. plan` of the worklog. This is the one explicit exception to the append-only worklog rule; record every plan edit under "Plan updates applied in section 2" in `## 3. review`.
 - Output (a) the updated plan and (b) a concise findings table: what was found and what changed.
 - Use context7 to check for the latest documentation where relevant.
 - **GitHub:** move the corresponding issue to **Planned** (see `github-project.md`).

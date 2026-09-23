@@ -1,13 +1,15 @@
 # homelab-data-service
 
-The **analytical data plane** of the doemefu homelab ([ADR 0002](../docs/adr/0002-network-telemetry-ownership.md), extending [ADR 0001](../docs/adr/0001-schedules-ownership-and-data-plane.md)). data-service owns historical and analytical data:
+The **analytical data plane** of the doemefu homelab, as decided in ADR 0002 "Network telemetry ownership", which extends ADR 0001 "Schedules ownership and data plane". data-service owns historical and analytical data:
 
 - **Network telemetry** (Epic doemefu/homelab#114): the central `netmon` store in PostgreSQL, filled by scheduled collectors and read by furchert-ch's `/dashboard/network`. This is the first deployable scope.
 - **Sensor history** (Epic #1, later): read-only historical InfluxDB queries. Not implemented yet.
 
+Neither ADR is in a git repository yet. Both live in the homelab parent workspace under `docs/adr/` (`0001-schedules-ownership-and-data-plane.md`, `0002-network-telemetry-ownership.md`), next to the service checkouts.
+
 **It does not** connect to MQTT, write to InfluxDB, manage users, issue tokens, or own schedules (device-service owns those, ADR 0001).
 
-**Contract:** [`docs/060-network-monitoring.md`](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md) in the `homelab` (infrastructure) repo is the single source of truth for the schema, the API, auth and the platform wiring. Implement from it; do not reverse-engineer this code.
+**Contract:** [`docs/060-network-monitoring.md`](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md) in the `homelab` (infrastructure) repo (added by doemefu/homelab#126) is the single source of truth for the schema, the API, auth and the platform wiring. Implement from it; do not reverse-engineer this code.
 
 ## Status
 

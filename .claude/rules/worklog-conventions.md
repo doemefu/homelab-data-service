@@ -24,6 +24,8 @@ updated_at: "YYYY-MM-DDTHH:MM:SS+01:00"
 ```
 
 ## Worklog structure (read & append-only, phases in order)
+Exception: during Phase 3 the `## 2. plan` section may be edited to apply review findings; each edit is recorded in `## 3. review` ("Plan updates applied in section 2").
+
 - `## 1. research`
 - `## 2. plan` (Markdown plan — see template)
 - `## 3. review` (updated plan + findings table)

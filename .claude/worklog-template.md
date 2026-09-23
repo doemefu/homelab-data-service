@@ -10,6 +10,8 @@ updated_at: "YYYY-MM-DDTHH:MM:SS+01:00"
 <!--
   WORKLOG RULES
   - This file is append-only. Do not rewrite earlier phase notes.
+    Exception: Phase 3 may edit the "2. plan" section to apply review findings;
+    list every such edit under "Plan updates applied in section 2" in "3. review".
   - Update `phase` and `updated_at` after each major step.
   - Set `phase: done` and `status: done` only after Phase 6 is complete.
   - Record every command and outcome (pass/fail + key output).
@@ -167,6 +169,7 @@ Files: `<!-- path -->`
 - <!-- Q2 -->
 
 **Plan updates applied in section 2:**
+<!-- Required record of every edit made to section 2 during this phase (the only allowed rewrite of earlier notes). -->
 - <!-- list updates or "none" -->
 
 **Review summary (required, 3 bullets):**
