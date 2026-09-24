@@ -2,7 +2,7 @@ package ch.furchert.homelab.data.support;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-/** Empties the NM-1, NM-3 and NM-2 tables and the collector state rows between integration tests. */
+/** Empties the NM-1, NM-3, NM-2 and NM-4 tables and the collector state rows between integration tests. */
 public final class NetmonTables {
 
     private NetmonTables() {
@@ -18,6 +18,7 @@ public final class NetmonTables {
         jdbc.sql("DELETE FROM netmon.ufw_block_snapshots").update();
         jdbc.sql("DELETE FROM netmon.ssh_auth_snapshots").update();
         jdbc.sql("DELETE FROM netmon.egress_flow_snapshots").update();
+        jdbc.sql("DELETE FROM netmon.login_events").update();
         jdbc.sql("DELETE FROM netmon.collector_state").update();
     }
 }

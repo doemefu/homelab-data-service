@@ -258,7 +258,10 @@ class InboundApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.inbound.statuses[0].status").value(401))
                 .andExpect(jsonPath("$.firewallEvents", hasSize(3)))
                 .andExpect(jsonPath("$.firewallEvents[0].rayName").value("ray-c"))
-                .andExpect(content().string(containsString("\"logins\":null")))
+                // NM-4: the logins block is always present; this IP has no login events.
+                .andExpect(jsonPath("$.logins.success").value(0))
+                .andExpect(jsonPath("$.logins.failure").value(0))
+                .andExpect(jsonPath("$.logins.locked").value(0))
                 // NM-3: the lan block is always present; this IP has no LAN rows.
                 .andExpect(jsonPath("$.lan.ufwBlocks").value(0))
                 .andExpect(jsonPath("$.lan.sshFailed").value(0));

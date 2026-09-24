@@ -63,7 +63,7 @@ NM-1 adds four collectors and the migration `V2__netmon_inbound` (five tables, a
    If Cloudflare later drops a field, every run fails with `upstream` (GraphQL `errors[]`) until the field is removed from the query. The design keeps 5-minute runs and at most 24 h per query and catch-up, so the 31-day history is not used yet. The page sizes 5000/1000 stay below the 10 000 maximum. A 30-day initial backfill is a follow-up.
 2. **Owner:** merge homelab#116 and run playbook 59. It adds the Secret keys `cloudflare-api-token` and `cloudflare-zone-id` to `data-service-secrets` (SOPS vars `data_service_cloudflare_analytics_token`, `data_service_cloudflare_zone_id`), plus the ServiceMonitor and the `NetmonCollectorStale` rule.
 3. **Merge this PR.** Flux rolls out the new image; Flyway applies V2 on startup.
-4. The env vars use `optional: true`. If step 2 has not run yet, the pod still starts; `cloudflare-requests` and `cloudflare-firewall` then fail every run with `lastErrorCode=credentials` in `/api/netmon/status`, never call out, and export no freshness gauge, so `NetmonCollectorStale` stays quiet. A running pod does not see Secret changes in env vars: after playbook 59 adds the keys, restart it once (`kubectl -n apps rollout restart deploy/data-service`, owner go).
+4. The env vars use `optional: true`. If step 2 has not run yet, the pod still starts; `cloudflare-requests` and `cloudflare-firewall` then fail every run with `lastErrorCode=credentials` in `/api/netmon/status`, never call out, and export no freshness gauge, so `NetmonCollectorStale` stays quiet. A running pod does not see Secret changes in env vars: after playbook 59 adds the keys, restart it once (`kubectl -n apps delete pod -l app=data-service`, owner go). Do not use `kubectl rollout restart`: the Deployment is Flux-managed, and Flux's next apply strips the `restartedAt` annotation, which can cancel the restart (verified 2026-09-24).
 5. `reputation` (AbuseIPDB) stays disabled (`enabled=false`, no gauge) until the owner approves a key and adds `abuseipdb-api-key` to the Secret.
 
 ### Verification (§11 NM-1)
@@ -80,6 +80,30 @@ $PSQL "select collector, last_success_at, last_window_end, consecutive_failures,
 ```
 
 The first blocklist refresh runs at the next 05:00 UTC. There is no manual trigger in v1 (§7.3), so the blocklist checks above pass only after that run.
+
+## NM-4 rollout (#17): login events
+
+NM-4 adds the `login-events` collector, the migration `V5__netmon_login_events` (one table, additive) and four env vars: `AUTH_TOKEN_URL`, `AUTH_SERVICE_URL` and `AUTH_CLIENT_ID` as plain values, and `AUTH_CLIENT_SECRET` from Secret key `auth-client-secret` with `optional: true`. Order across repos (docs/060 §9, §11): **SOPS vars → playbook 59 (doemefu/homelab#134) → auth-service restart (doemefu/homelab-auth-service#96) → this repo's #17 PR → doemefu/furchert-ch#64**. The first three steps were done on 2026-09-24: auth-service logs "Login-event outbox enabled" since 13:03 UTC, and `data-service-secrets` has `auth-client-secret`.
+
+1. **Merge this PR.** Flux rolls out the new image and a new pod, which reads `AUTH_CLIENT_SECRET` at start. Flyway applies V5 on startup.
+2. `login-events` runs every minute at :15 s. The first run pulls the whole outbox from `after=0`, up to 10 pages of 500 events per run, so at most 72 h of history. The cursor (the last outbox id) lives in `collector_state.cursor`.
+3. Status while something is missing:
+   - **Secret key absent or empty when the pod started:** every run fails with `lastErrorCode=credentials` without calling out, and no freshness gauge is exported. After adding the key, recreate the pod once (`kubectl -n apps delete pod -l app=data-service`, owner go).
+   - **Wrong secret, or the `data-service` client not seeded in auth-service:** the token call answers 401 `invalid_client`, and the run fails with `credentials`. The gauge exists and turns stale, so `NetmonCollectorStale` (15 min class) fires.
+   - **auth-service outbox disabled** (its HMAC key missing): the endpoint answers 503, and the run succeeds with `lastErrorCode=upstream` and `consecutiveFailures: 0` ("no data yet"). The WARN line `[login-events] run completed with warning: code=upstream …` is expected.
+4. An outage of data-service shorter than the outbox TTL (72 h) loses nothing; the next run catches up from the cursor. Events purged during a longer outage are lost without a marker.
+5. **Secret rotation** needs both sides: the SOPS value, playbook 59, an update of the `oauth2_registered_client` row in auth-service (its seeder never updates an existing client; auth-service `INTERFACES.md`), then a data-service pod restart.
+
+### Verification (§11 NM-4)
+
+```bash
+PSQL='kubectl -n apps exec postgresql-0 -c postgresql -- psql -U postgres -d data_service -c'
+$PSQL "select version, success from public.flyway_schema_history_data order by installed_rank"     # 1 to 5
+$PSQL "select collector, last_success_at, last_window_end, cursor, consecutive_failures, last_error_code from netmon.collector_state where collector = 'login-events'"
+# §11: a failed login from a test client appears within 2 min with ip_source = cf-connecting-ip
+$PSQL "select occurred_at, outcome, ip_source, left(username_hmac, 8) from netmon.login_events order by occurred_at desc limit 5"
+kubectl -n apps logs deploy/data-service | grep -E 'Migrating schema .* to version "5|\[login-events\]'
+```
 
 ## NM-2 rollout (#16): egress snapshots
 

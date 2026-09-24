@@ -5,6 +5,11 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Added
+- NM-4 (#17): Flyway `V5__netmon_login_events` with `login_events` (docs/060 §3.3): upsert do-nothing on `event_id`, CHECKs for outcome, IP source, HMAC format and "subject only on success".
+- Collector `login-events`: every minute pulls the auth-service login-event outbox (`GET /api/v1/login-events`) with a cached `client_credentials` token (`scope=login-events:read`), pages while `hasMore` (max 10 pages per run), keeps the producer's id cursor in `collector_state.cursor` and enriches public client IPs (`seen_in` `login`). Without `AUTH_CLIENT_SECRET` it fails with `credentials` and exports no gauge; a disabled outbox (503) is a success with an `upstream` warning.
+- `GET /api/netmon/logins/summary` (totals, `byIp`, `bySubject` with `failureSameHmac`, timeline) and `/logins/events` (cursor paging, `outcome`/`ip` filters, 8-character HMAC prefix only); `/ips/{ip}` now returns `logins: {success, failure, locked}` instead of `null`.
+- Retention for `login_events` (180 d).
+- `k8s/deployment.yaml`: `AUTH_TOKEN_URL`, `AUTH_SERVICE_URL`, `AUTH_CLIENT_ID` and `AUTH_CLIENT_SECRET` (Secret key `auth-client-secret`, `optional: true`).
 - NM-2 (#16): Flyway `V4__netmon_egress` with `egress_flow_snapshots` (docs/060 §3.3), including a generated `destination_host` and a nullable `destination_ip` for destinations coroot reports by name only.
 - Collector `egress`: hourly at :07 UTC snapshots the coroot-node-agent TCP counters from Prometheus per completed hour (the six §4.6 queries incl. the series-presence query, `ip_to_fqdn` join, failed connects joined on `destination` when unambiguous), replaced per `window_start`, capped at 2 000 rows (`truncated` warning), `is_new` against the previous 30 days on a rollout-stable workload identity, 48 h catch-up. Without running agents it succeeds with `lastErrorCode=upstream`.
 - `GET /api/netmon/egress/top` (`scope=external|all`, `namespace`, `workload`, top-N `limit`), matching furchert-ch's `EgressFlow` shape.
@@ -25,6 +30,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - `k8s/deployment.yaml`: `CLOUDFLARE_GRAPHQL_URL`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `ABUSEIPDB_API_KEY` (Secret keys `optional: true`).
 
 ### Changed
+- `DEPLOYMENT.md`: restart the pod with `kubectl -n apps delete pod -l app=data-service` instead of `kubectl rollout restart`, because Flux strips the restart annotation on its next apply.
 - The freshness gauge is registered only for collectors that are enabled and able to succeed. A collector switched off, `reputation` without a key, or a Cloudflare collector without credentials therefore cannot trip `NetmonCollectorStale`.
 - Cloudflare request groups carry no ASN (`httpRequestsAdaptiveGroups` does not offer it; probe 2026-09-24). `inbound_request_groups` has no `asn`/`asn_org` columns, and ASN reaches `ip_enrichment` from firewall events only.
 - `@EnableScheduling` moved to `SchedulingConfig` (`netmon.scheduling.enabled`, default `true`).
