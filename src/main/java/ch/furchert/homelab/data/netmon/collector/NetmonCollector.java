@@ -36,6 +36,15 @@ public interface NetmonCollector {
     }
 
     /**
+     * Whether a failure with this {@link ErrorCode} spaces the next runs by the runner's exponential backoff.
+     * Default: {@code rate_limited} and {@code upstream}. A collector may add codes (e.g. {@code login-events} adds
+     * {@code credentials}, so a wrong secret does not hit the IdP every minute).
+     */
+    default boolean backsOffAfter(ErrorCode code) {
+        return code == ErrorCode.RATE_LIMITED || code == ErrorCode.UPSTREAM;
+    }
+
+    /**
      * Performs one run. Throw {@link CollectorException} with a safe, self-authored message for
      * expected failures; any other exception is recorded as {@code internal} by class name only.
      */

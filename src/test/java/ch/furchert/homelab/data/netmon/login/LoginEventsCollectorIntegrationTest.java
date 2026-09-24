@@ -47,6 +47,8 @@ class LoginEventsCollectorIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     LoginEventRepository repository;
     @Autowired
+    org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate named;
+    @Autowired
     IpEnrichmentService enrichment;
     @Autowired
     CollectorStateRepository state;
@@ -59,6 +61,11 @@ class LoginEventsCollectorIntegrationTest extends AbstractIntegrationTest {
     }
 
     private LoginEventsCollector collector(String secret, int pageSize, int maxPages, Consumer<MockRestServiceServer> stub) {
+        return collector(secret, pageSize, maxPages, enrichment, stub);
+    }
+
+    private LoginEventsCollector collector(String secret, int pageSize, int maxPages, IpEnrichmentService enrichment,
+                                           Consumer<MockRestServiceServer> stub) {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         stub.accept(server);
@@ -151,16 +158,65 @@ class LoginEventsCollectorIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void skippedRowsStillAdvanceTheCursor() {
-        collector("secret", 500, 10, s -> {
+    void skippedRowsAdvanceTheCursorAndEndThePartialWarning() {
+        LoginEventsCollector collector = collector("secret", 500, 10, s -> {
             token(s);
             expectPage(s, 0, 500, page(List.of(
                     event(1, "2026-09-24T13:00:00Z", "denied", "203.0.113.7", "remote-addr", HMAC_A, null, null),
                     failure(2, null)), 2, false));
-        }).collect();
+        });
+
+        assertThat(runner.run(collector)).isTrue();
 
         assertThat(count()).isEqualTo(1L);
-        assertThat(stateRow().get("cursor")).isEqualTo("2");
+        Map<String, Object> st = stateRow();
+        assertThat(st.get("cursor")).isEqualTo("2");
+        assertThat(st.get("last_error_code")).isEqualTo("partial");
+        assertThat(st.get("consecutive_failures")).isEqualTo(0);
+        assertThat((String) st.get("last_error")).contains("skipped 1 ").doesNotContain("203.0.113.7").doesNotContain(HMAC_A);
+        assertThat(st.get("last_window_end")).isNotNull();
+    }
+
+    @Test
+    void cursorStaysWhenEnrichmentFails() {
+        IpEnrichmentService failing = new IpEnrichmentService(named, jdbc) {
+            @Override
+            public int record(String dataset, String source, java.util.Collection<ch.furchert.homelab.data.netmon.enrichment.Sighting> sightings) {
+                throw new IllegalStateException("enrichment down");
+            }
+        };
+        state.updateCursor(LoginEventsCollector.NAME, "4");
+        LoginEventsCollector collector = collector("secret", 500, 10, failing, s -> {
+            token(s);
+            expectPage(s, 4, 500, page(List.of(failure(5, "203.0.113.7")), 5, false));
+        });
+
+        assertThat(runner.run(collector)).isFalse();
+
+        // The event itself is stored (idempotent), but the next run re-reads the page and enriches it.
+        assertThat(stateRow().get("cursor")).isEqualTo("4");
+        assertThat(stateRow().get("last_error_code")).isEqualTo("internal");
+    }
+
+    @Test
+    void credentialFailuresBackOffForThisCollector() {
+        LoginEventsCollector collector = collector("secret", 500, 10, s -> {
+        });
+        assertThat(collector.backsOffAfter(ch.furchert.homelab.data.netmon.collector.ErrorCode.CREDENTIALS)).isTrue();
+        assertThat(collector.backsOffAfter(ch.furchert.homelab.data.netmon.collector.ErrorCode.UPSTREAM)).isTrue();
+        assertThat(collector.backsOffAfter(ch.furchert.homelab.data.netmon.collector.ErrorCode.INTERNAL)).isFalse();
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void aRunLongAfterTheLastSuccessLogsTheTtlGap(org.springframework.boot.test.system.CapturedOutput output) {
+        state.recordSuccess(LoginEventsCollector.NAME, NOW.minus(java.time.Duration.ofHours(73)));
+        collector("secret", 500, 10, s -> {
+            token(s);
+            expectPage(s, 0, 500, page(List.of(), 0, false));
+        }).collect();
+
+        assertThat(output).contains("[login-events] last success older than the 72 h outbox TTL");
     }
 
     @Test

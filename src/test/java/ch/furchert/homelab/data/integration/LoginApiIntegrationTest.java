@@ -147,6 +147,15 @@ class LoginApiIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void repeatedSuccessesDoNotMultiplyFailureSameHmac() throws Exception {
+        // A second success of dominic with the same HMAC (outside the window) must not double the one failure.
+        row(10, "2026-09-21T12:00:00Z", "success", "198.51.100.9", "cf-connecting-ip", HMAC_B, "dominic", null);
+        call(SUMMARY, "from", FROM, "to", TO)
+                .andExpect(jsonPath("$.bySubject[0].subject").value("dominic"))
+                .andExpect(jsonPath("$.bySubject[0].failureSameHmac").value(1));
+    }
+
+    @Test
     void emptyWindowGivesZerosAndEmptyLists() throws Exception {
         call(SUMMARY, "from", "2026-09-01T00:00:00Z", "to", "2026-09-02T00:00:00Z")
                 .andExpect(status().isOk())

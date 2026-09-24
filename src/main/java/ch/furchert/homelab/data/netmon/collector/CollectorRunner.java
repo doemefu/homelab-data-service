@@ -17,7 +17,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * ({@code netmon.collectors.<name>.enabled}), no overlap (in-JVM {@link ReentrantLock#tryLock()};
  * data-service runs a single replica and every write is idempotent), and the failure rule (state
  * keeps its high-water mark, {@code consecutive_failures} increments, {@code last_error} is set).
- * After {@code rate_limited}/{@code upstream} failures, runs are spaced by an exponential backoff of
+ * After {@code rate_limited}/{@code upstream} failures (or the codes a collector adds via
+ * {@link NetmonCollector#backsOffAfter(ErrorCode)}), runs are spaced by an exponential backoff of
  * {@code min(cadence * 2^(failures-1), 30 min)}; a {@link CollectorWarning} counts as a success whose
  * code and message are kept for the status API.
  */
@@ -93,9 +94,11 @@ public class CollectorRunner {
 
     private boolean inBackoff(NetmonCollector collector, Instant now) {
         CollectorState state = repository.find(collector.name()).orElse(null);
-        if (state == null || state.consecutiveFailures() == 0 || state.lastAttemptAt() == null
-                || !(ErrorCode.RATE_LIMITED.value().equals(state.lastErrorCode())
-                || ErrorCode.UPSTREAM.value().equals(state.lastErrorCode()))) {
+        if (state == null || state.consecutiveFailures() == 0 || state.lastAttemptAt() == null) {
+            return false;
+        }
+        ErrorCode code = ErrorCode.fromValue(state.lastErrorCode());
+        if (code == null || !collector.backsOffAfter(code)) {
             return false;
         }
         Duration backoff = backoff(collector.cadence(), state.consecutiveFailures());

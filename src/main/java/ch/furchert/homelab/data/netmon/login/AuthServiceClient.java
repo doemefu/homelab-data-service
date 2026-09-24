@@ -33,7 +33,9 @@ import java.util.regex.Pattern;
  * a {@code client_credentials} token with {@code scope=login-events:read}, cached until {@code expires_in − 60 s},
  * and {@code GET /api/v1/login-events?after&limit}. Errors map to the status API codes:
  * <ul>
- *   <li>blank secret, token 400/401, page 401/403 → {@code credentials} (a page 401 also drops the cached token);</li>
+ *   <li>blank secret, token 400/401, page 403 → {@code credentials}; a page 401 is retried once with a fresh token
+ *       and is {@code credentials} only if the retry is rejected too. Page 401 and 403 drop the cached token, so a
+ *       fixed scope or secret takes effect on the next call.</li>
  *   <li>429 → {@code rate_limited}; other non-2xx, I/O and malformed JSON → {@code upstream};</li>
  *   <li>page 503 (the producer's feature is disabled) → {@link CollectorWarning} {@code upstream}, i.e. "no data yet"
  *       (docs/060 §7.2).</li>
@@ -72,24 +74,24 @@ public class AuthServiceClient {
 
     /** One outbox page after {@code after} (exclusive). */
     public LoginEventPage page(long after, int limit) {
-        String token = token();
         String uri = UriComponentsBuilder.fromUriString(properties.loginEventsUrl())
                 .queryParam("after", after)
                 .queryParam("limit", limit)
                 .build()
                 .toUriString();
-        Response response = call(() -> restClient.get()
-                .uri(uri)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-                .accept(MediaType.APPLICATION_JSON)
-                .exchange((request, res) -> new Response(res.getStatusCode().value(),
-                        res.getBody().readNBytes(MAX_BODY_BYTES + 1))), "login-event outbox");
-        int status = response.status();
-        if (status == 401) {
+        Response response = fetch(uri, token());
+        if (response.status() == 401) {
+            // A token revoked or signed with a rotated key: one retry with a fresh token in the same run.
             invalidateToken();
-            throw new CollectorException(ErrorCode.CREDENTIALS, "auth-service rejected the access token (HTTP 401)");
+            response = fetch(uri, token());
+            if (response.status() == 401) {
+                invalidateToken();
+                throw new CollectorException(ErrorCode.CREDENTIALS, "auth-service rejected the access token (HTTP 401)");
+            }
         }
+        int status = response.status();
         if (status == 403) {
+            invalidateToken();
             throw new CollectorException(ErrorCode.CREDENTIALS,
                     "auth-service denied the login-event outbox (HTTP 403, scope login-events:read missing)");
         }
@@ -98,6 +100,15 @@ public class AuthServiceClient {
         }
         checkStatus(status, "login-event outbox");
         return parsePage(readTree(response, "login-event outbox"));
+    }
+
+    private Response fetch(String uri, String token) {
+        return call(() -> restClient.get()
+                .uri(uri)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                .accept(MediaType.APPLICATION_JSON)
+                .exchange((request, res) -> new Response(res.getStatusCode().value(),
+                        res.getBody().readNBytes(MAX_BODY_BYTES + 1))), "login-event outbox");
     }
 
     /** Forgets the cached access token, e.g. after the producer rejected it. */

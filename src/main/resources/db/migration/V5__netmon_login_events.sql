@@ -29,3 +29,8 @@ CREATE TABLE netmon.login_events (
 CREATE INDEX login_events_occurred_at_idx ON netmon.login_events (occurred_at);
 CREATE INDEX login_events_client_ip_idx ON netmon.login_events (client_ip, occurred_at);
 CREATE INDEX login_events_username_hmac_idx ON netmon.login_events (username_hmac, occurred_at);
+
+-- docs/060 §3.3/§7.2 amendment (homelab#134): the warning code `partial` (rows skipped by contract validation).
+ALTER TABLE netmon.collector_state DROP CONSTRAINT collector_state_last_error_code_check;
+ALTER TABLE netmon.collector_state ADD CONSTRAINT collector_state_last_error_code_check
+    CHECK (last_error_code IN ('credentials', 'rate_limited', 'upstream', 'truncated', 'partial', 'internal'));

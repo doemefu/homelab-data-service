@@ -89,10 +89,20 @@ NM-4 adds the `login-events` collector, the migration `V5__netmon_login_events` 
 2. `login-events` runs every minute at :15 s. The first run pulls the whole outbox from `after=0`, up to 10 pages of 500 events per run, so at most 72 h of history. The cursor (the last outbox id) lives in `collector_state.cursor`.
 3. Status while something is missing:
    - **Secret key absent or empty when the pod started:** every run fails with `lastErrorCode=credentials` without calling out, and no freshness gauge is exported. After adding the key, recreate the pod once (`kubectl -n apps delete pod -l app=data-service`, owner go).
-   - **Wrong secret, or the `data-service` client not seeded in auth-service:** the token call answers 401 `invalid_client`, and the run fails with `credentials`. The gauge exists and turns stale, so `NetmonCollectorStale` (15 min class) fires.
+   - **Wrong secret, or the `data-service` client not seeded in auth-service:** the token call answers 401 `invalid_client`, and the run fails with `credentials`. Runs then back off (1, 2, 4 … up to 30 min) so auth-service does not log a failed client authentication every minute. The gauge exists and turns stale, so `NetmonCollectorStale` (15 min class) fires.
    - **auth-service outbox disabled** (its HMAC key missing): the endpoint answers 503, and the run succeeds with `lastErrorCode=upstream` and `consecutiveFailures: 0` ("no data yet"). The WARN line `[login-events] run completed with warning: code=upstream …` is expected.
-4. An outage of data-service shorter than the outbox TTL (72 h) loses nothing; the next run catches up from the cursor. Events purged during a longer outage are lost without a marker.
+4. An outage of data-service shorter than the outbox TTL (72 h) loses nothing; the next run catches up from the cursor. Events purged during a longer outage are lost without a marker; the first run after it logs `[login-events] last success older than the 72 h outbox TTL`.
+   - `lastErrorCode=partial` with `consecutiveFailures: 0` means a run skipped outbox rows that violate the `login_events` contract (producer shape drift); the WARN line carries only the count.
 5. **Secret rotation** needs both sides: the SOPS value, playbook 59, an update of the `oauth2_registered_client` row in auth-service (its seeder never updates an existing client; auth-service `INTERFACES.md`), then a data-service pod restart.
+
+### Troubleshooting: auth-service database restored
+
+`login_event_outbox` ids come from a sequence in `homelabdb`. After a restore of that database (or a recreated outbox table), new ids can start **below** the stored cursor. Runs then succeed with empty pages and `/status` looks fresh, while new events are skipped until the 72 h purge removes them. After any such restore, reset the cursor (owner go); the replay is absorbed by `event_id`:
+
+```bash
+kubectl -n apps exec postgresql-0 -c postgresql -- psql -U postgres -d data_service \
+  -c "UPDATE netmon.collector_state SET cursor = NULL WHERE collector = 'login-events'"
+```
 
 ### Verification (§11 NM-4)
 

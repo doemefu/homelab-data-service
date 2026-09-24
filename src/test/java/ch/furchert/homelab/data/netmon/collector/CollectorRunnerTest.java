@@ -216,4 +216,35 @@ class CollectorRunnerTest {
         assertThat(runner(Map.of()).run(collector("demo", () -> {
         }))).isTrue();
     }
+
+    @Test
+    void aCollectorCanAddCodesToTheBackoff() {
+        when(repository.find("demo")).thenReturn(Optional.of(new CollectorState("demo", null, null,
+                NOW.minus(Duration.ofMinutes(5)), null, 2, "CollectorException: HTTP 401", "credentials")));
+        AtomicBoolean called = new AtomicBoolean();
+        NetmonCollector backsOffOnCredentials = new NetmonCollector() {
+            @Override
+            public String name() {
+                return "demo";
+            }
+
+            @Override
+            public Duration cadence() {
+                return Duration.ofMinutes(5);
+            }
+
+            @Override
+            public boolean backsOffAfter(ErrorCode code) {
+                return code == ErrorCode.CREDENTIALS || NetmonCollector.super.backsOffAfter(code);
+            }
+
+            @Override
+            public void collect() {
+                called.set(true);
+            }
+        };
+
+        assertThat(runner(Map.of()).run(backsOffOnCredentials)).isFalse();
+        assertThat(called).isFalse();
+    }
 }

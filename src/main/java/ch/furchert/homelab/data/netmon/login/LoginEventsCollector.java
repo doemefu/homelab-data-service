@@ -5,6 +5,7 @@ import ch.furchert.homelab.data.netmon.collector.CollectorException;
 import ch.furchert.homelab.data.netmon.collector.CollectorRunner;
 import ch.furchert.homelab.data.netmon.collector.CollectorState;
 import ch.furchert.homelab.data.netmon.collector.CollectorStateRepository;
+import ch.furchert.homelab.data.netmon.collector.CollectorWarning;
 import ch.furchert.homelab.data.netmon.collector.ErrorCode;
 import ch.furchert.homelab.data.netmon.collector.NetmonCollector;
 import ch.furchert.homelab.data.netmon.enrichment.IpEnrichmentService;
@@ -26,13 +27,18 @@ import java.util.List;
  *   <li>Pages with {@code after = collector_state.cursor} (0 on the first run) while {@code hasMore} is true, at most
  *       {@code netmon.auth-service.max-pages} pages per run; a run that stops at the cap resumes a minute later.</li>
  *   <li>Each page is upserted on {@code event_id} and its public IPs are enriched (§4.3, data set {@code login})
- *       before the cursor moves to the page's {@code nextAfter}, so a crash replays at most one page harmlessly.</li>
+ *       before the cursor moves to the page's {@code nextAfter}, so a crash replays at most one page harmlessly.
+ *       Rows violating the §3.3 contract are skipped (the cursor still covers them) and the run ends with the
+ *       warning {@code partial}, carrying only the count.</li>
  *   <li>A run that drains the outbox sets {@code last_window_end} to its start minus auth-service's 10 s settle
  *       window: every event recorded before that has been pulled.</li>
- *   <li>The outbox keeps 72 h (§4.1 catch-up cap); events purged during a longer outage are lost without a marker.</li>
+ *   <li>The outbox keeps 72 h (§4.1 catch-up cap); events purged during a longer outage are lost without a marker.
+ *       A run that starts more than 72 h after the last success logs that once.</li>
  * </ul>
  * Status semantics live in {@link AuthServiceClient}: no secret → {@code credentials} failure and no freshness gauge;
- * a disabled outbox (503) → a successful run with an {@code upstream} warning ("no data yet", §7.2).
+ * a disabled outbox (503) → a successful run with an {@code upstream} warning ("no data yet", §7.2). Unlike the
+ * other collectors, {@code credentials} failures also back off, so a wrong secret does not produce a failed client
+ * authentication in auth-service every minute (docs/060 §7.6 amendment, homelab#134).
  */
 @Component
 public class LoginEventsCollector implements NetmonCollector {
@@ -41,6 +47,8 @@ public class LoginEventsCollector implements NetmonCollector {
     /** auth-service serves only rows recorded at least this long ago ({@code app.login-events.settle}). */
     static final Duration PRODUCER_SETTLE = Duration.ofSeconds(10);
     static final String DATASET = "login";
+    /** auth-service purges outbox rows older than this ({@code app.login-events.ttl}). */
+    static final Duration OUTBOX_TTL = Duration.ofHours(72);
 
     private static final Logger log = LoggerFactory.getLogger(LoginEventsCollector.class);
 
@@ -86,16 +94,26 @@ public class LoginEventsCollector implements NetmonCollector {
     }
 
     @Override
+    public boolean backsOffAfter(ErrorCode code) {
+        return code == ErrorCode.CREDENTIALS || NetmonCollector.super.backsOffAfter(code);
+    }
+
+    @Override
     public void collect() {
         Instant runStart = clock.instant().truncatedTo(ChronoUnit.SECONDS);
-        long after = cursor();
-        for (int pages = 0; pages < properties.maxPages(); pages++) {
+        CollectorState current = state.find(NAME).orElse(null);
+        if (current != null && current.lastSuccessAt() != null
+                && current.lastSuccessAt().isBefore(runStart.minus(OUTBOX_TTL))) {
+            log.warn("[{}] last success older than the 72 h outbox TTL; events purged meanwhile are lost", NAME);
+        }
+        long after = cursor(current);
+        int skipped = 0;
+        boolean drained = false;
+        for (int pages = 0; pages < properties.maxPages() && !drained; pages++) {
             LoginEventPage page = client.page(after, properties.pageSize());
             repository.insertAll(page.events());
             enrichment.record(DATASET, LoginEventRepository.SOURCE, sightings(page.events()));
-            if (page.skipped() > 0) {
-                log.warn("[{}] skipped {} outbox rows that violate the login_events contract", NAME, page.skipped());
-            }
+            skipped += page.skipped();
             if (page.nextAfter() > after) {
                 after = page.nextAfter();
                 state.updateCursor(NAME, Long.toString(after));
@@ -104,14 +122,21 @@ public class LoginEventsCollector implements NetmonCollector {
             }
             if (!page.hasMore()) {
                 state.updateWindowEnd(NAME, runStart.minus(PRODUCER_SETTLE));
-                return;
+                drained = true;
             }
         }
-        log.info("[{}] page cap of {} reached; continuing next run", NAME, properties.maxPages());
+        if (!drained) {
+            log.info("[{}] page cap of {} reached; continuing next run", NAME, properties.maxPages());
+        }
+        if (skipped > 0) {
+            // Only the count, never the rows (docs/060 §10).
+            throw new CollectorWarning(ErrorCode.PARTIAL,
+                    "skipped " + skipped + " outbox rows that violate the login_events contract");
+        }
     }
 
-    private long cursor() {
-        String cursor = state.find(NAME).map(CollectorState::cursor).orElse(null);
+    private long cursor(CollectorState current) {
+        String cursor = current == null ? null : current.cursor();
         if (cursor == null) {
             return 0;
         }

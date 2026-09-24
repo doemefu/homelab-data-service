@@ -130,10 +130,38 @@ class AuthServiceClientTest {
     }
 
     @Test
-    void unauthorizedPageDropsTheCachedToken() {
+    void unauthorizedPageIsRetriedOnceWithAFreshToken() {
         AuthServiceClient client = client(SECRET);
         expectToken("tok-1");
         server.expect(requestTo(EVENTS_URL + "?after=0&limit=500")).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+        expectToken("tok-2");
+        expectPage(0, "tok-2", page(List.of(), 0, false));
+
+        assertThat(client.page(0, 500).events()).isEmpty();
+        server.verify();
+    }
+
+    @Test
+    void unauthorizedRetryFailsWithCredentialsAndDropsTheToken() {
+        AuthServiceClient client = client(SECRET);
+        expectToken("tok-1");
+        server.expect(requestTo(EVENTS_URL + "?after=0&limit=500")).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+        expectToken("tok-2");
+        server.expect(requestTo(EVENTS_URL + "?after=0&limit=500")).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+        expectToken("tok-3");
+        expectPage(0, "tok-3", page(List.of(), 0, false));
+
+        assertThatThrownBy(() -> client.page(0, 500))
+                .isInstanceOfSatisfying(CollectorException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.CREDENTIALS));
+        client.page(0, 500);
+        server.verify();
+    }
+
+    @Test
+    void forbiddenPageDropsTheCachedToken() {
+        AuthServiceClient client = client(SECRET);
+        expectToken("tok-1");
+        server.expect(requestTo(EVENTS_URL + "?after=0&limit=500")).andRespond(withStatus(HttpStatus.FORBIDDEN));
         expectToken("tok-2");
         expectPage(0, "tok-2", page(List.of(), 0, false));
 
@@ -141,6 +169,21 @@ class AuthServiceClientTest {
                 .isInstanceOfSatisfying(CollectorException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.CREDENTIALS));
         client.page(0, 500);
         server.verify();
+    }
+
+    @Test
+    void unknownFieldsAreIgnored() {
+        AuthServiceClient client = client(SECRET);
+        expectToken("tok-1");
+        String withExtra = event(3, "2026-09-24T13:00:00Z", "failure", "203.0.113.7", "remote-addr", HMAC_A, null, null)
+                .replace("\"id\":3,", "\"id\":3,\"recordedAt\":\"2026-09-24T13:00:01Z\",\"futureField\":{\"a\":1},");
+        expectPage(0, "tok-1", "{\"events\":[" + withExtra + "],\"nextAfter\":3,\"hasMore\":false,\"apiVersion\":2}");
+
+        LoginEventPage result = client.page(0, 500);
+
+        assertThat(result.events()).hasSize(1);
+        assertThat(result.skipped()).isZero();
+        assertThat(withExtra).contains("futureField");
     }
 
     @Test
