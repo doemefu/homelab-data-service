@@ -21,7 +21,7 @@ spec:
           # Image tag is managed by Flux CD image automation. The initial tag is a placeholder that
           # was never built (same bootstrap as auth-service/device-service): Flux replaces it with
           # the first main-<timestamp> tag once homelab#115 wires cluster/apps/data-service/.
-          image: ghcr.io/doemefu/homelab-data-service:main-20260924T122248 # {"$imagepolicy": "flux-system:data-service"}
+          image: ghcr.io/doemefu/homelab-data-service:main-20260924T131549 # {"$imagepolicy": "flux-system:data-service"}
           ports:
             - containerPort: 8082
           env:
