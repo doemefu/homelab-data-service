@@ -58,8 +58,8 @@ spec:
                   name: data-service-secrets
                   key: cloudflare-zone-id
                   optional: true
-            # docs/060 §4.5: absent until the owner approves an AbuseIPDB key; the reputation collector
-            # stays disabled while it is unset.
+            # docs/060 §4.5: optional; set via playbook 59 (doemefu/homelab#146). The reputation collector
+            # is disabled while the key is absent.
             - name: ABUSEIPDB_API_KEY
               valueFrom:
                 secretKeyRef:

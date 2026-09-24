@@ -64,7 +64,7 @@ NM-1 adds four collectors and the migration `V2__netmon_inbound` (five tables, a
 2. **Owner:** merge homelab#116 and run playbook 59. It adds the Secret keys `cloudflare-api-token` and `cloudflare-zone-id` to `data-service-secrets` (SOPS vars `data_service_cloudflare_analytics_token`, `data_service_cloudflare_zone_id`), plus the ServiceMonitor and the `NetmonCollectorStale` rule.
 3. **Merge this PR.** Flux rolls out the new image; Flyway applies V2 on startup.
 4. The env vars use `optional: true`. If step 2 has not run yet, the pod still starts; `cloudflare-requests` and `cloudflare-firewall` then fail every run with `lastErrorCode=credentials` in `/api/netmon/status`, never call out, and export no freshness gauge, so `NetmonCollectorStale` stays quiet. A running pod does not see Secret changes in env vars: after playbook 59 adds the keys, restart it once (`kubectl -n apps delete pod -l app=data-service`, owner go). Do not use `kubectl rollout restart`: the Deployment is Flux-managed, and Flux's next apply strips the `restartedAt` annotation, which can cancel the restart (verified 2026-09-24).
-5. `reputation` (AbuseIPDB) stays disabled (`enabled=false`, no gauge) until the owner approves a key and adds `abuseipdb-api-key` to the Secret.
+5. `reputation` (AbuseIPDB): the key is optional and set via playbook 59 (doemefu/homelab#146). The collector is disabled (`enabled=false`, no gauge) while `abuseipdb-api-key` is absent from the Secret. After adding it, recreate the pod as in step 4.
 
 ### Verification (§11 NM-1)
 
