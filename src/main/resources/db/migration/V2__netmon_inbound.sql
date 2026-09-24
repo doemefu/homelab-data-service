@@ -10,8 +10,8 @@ CREATE TABLE netmon.inbound_request_groups (
     is_final        boolean     NOT NULL,
     client_ip       inet        NOT NULL,
     country         char(2),
-    asn             integer,
-    asn_org         text,
+    -- No asn/asn_org: httpRequestsAdaptiveGroups has no ASN dimensions (Free-plan probe 2026-09-24);
+    -- ASN reaches ip_enrichment from firewall events only.
     host            text        NOT NULL,
     method          text        NOT NULL,
     -- clientRequestPath (no query string), truncated to 1024 chars before aggregation.

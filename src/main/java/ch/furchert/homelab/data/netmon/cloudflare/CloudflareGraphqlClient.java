@@ -41,6 +41,11 @@ public class CloudflareGraphqlClient {
 
     private static final Logger log = LoggerFactory.getLogger(CloudflareGraphqlClient.class);
 
+    /**
+     * docs/060 §4.2 query A without {@code clientAsn}/{@code clientASNDescription}: the zone's
+     * {@code httpRequestsAdaptiveGroups} does not offer them (settings probe 2026-09-24), and requesting an
+     * unavailable field fails the whole query. ASN comes from query B via {@code ip_enrichment}.
+     */
     static final String QUERY_GROUPS = """
             query InboundGroups($zoneTag: string!, $since: Time!, $until: Time!, $limit: uint64!) {
               viewer { zones(filter: {zoneTag: $zoneTag}) {
@@ -48,7 +53,7 @@ public class CloudflareGraphqlClient {
                     filter: {datetime_geq: $since, datetime_lt: $until}, orderBy: [count_DESC]) {
                   count
                   avg { sampleInterval }
-                  dimensions { clientIP clientCountryName clientAsn clientASNDescription
+                  dimensions { clientIP clientCountryName
                                clientRequestHTTPHost clientRequestHTTPMethodName clientRequestPath edgeResponseStatus }
                 } } }
             }""";
@@ -93,8 +98,6 @@ public class CloudflareGraphqlClient {
             groups.add(new RequestGroup(
                     ip,
                     country(d),
-                    asn(d),
-                    text(d, "clientASNDescription"),
                     nonNull(text(d, "clientRequestHTTPHost")),
                     nonNull(text(d, "clientRequestHTTPMethodName")),
                     truncate(nonNull(text(d, "clientRequestPath")), MAX_PATH),

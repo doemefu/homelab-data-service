@@ -45,11 +45,22 @@ Steps 1, 3, 4 and 5 are owner actions (secrets, cluster mutations, merges). No a
 
 NM-1 adds four collectors and the migration `V2__netmon_inbound` (five tables, additive). Merge order across repos (docs/060 §11): **doemefu/homelab#116 → this repo's #14 PR → doemefu/furchert-ch#61**.
 
-1. **Merge gate — Cloudflare field probe (§4.2).** The owner runs the `settings` probe query against zone furchert.ch and records `availableFields` / `maxPageSize` for `httpRequestsAdaptiveGroups` and `firewallEventsAdaptive`. Check each dataset against its own query:
-   - `httpRequestsAdaptiveGroups` (query A): `count`, `avg.sampleInterval`, and the dimensions `clientIP`, `clientCountryName`, `clientAsn`, `clientASNDescription`, `clientRequestHTTPHost`, `clientRequestHTTPMethodName`, `clientRequestPath`, `edgeResponseStatus`.
+1. **Cloudflare field probe (§4.2): done 2026-09-24.** The owner ran the `settings` probe against zone furchert.ch. Result:
+
+   | | `httpRequestsAdaptiveGroups` | `firewallEventsAdaptive` |
+   |---|---|---|
+   | `enabled` | true | true |
+   | `maxDuration` (max span of one query) | 2 592 000 s (30 d) | 2 592 000 s (30 d) |
+   | `notOlderThan` (history available) | 2 678 400 s (31 d) | 2 678 400 s (31 d) |
+   | `maxPageSize` | 10 000 | 10 000 |
+   | `maxNumberOfFields` | 40 | 40 |
+   | ASN fields | **not available** (`clientAsn`, `clientASNDescription` missing) | available |
+
+   The collectors request only fields the probe lists:
+   - `httpRequestsAdaptiveGroups` (query A): `count`, `avg.sampleInterval`, and the dimensions `clientIP`, `clientCountryName`, `clientRequestHTTPHost`, `clientRequestHTTPMethodName`, `clientRequestPath`, `edgeResponseStatus`. There is no ASN. A request-only IP has no ASN until it appears in a firewall event.
    - `firewallEventsAdaptive` (query B): `datetime`, `rayName`, `clientIP`, `clientCountryName`, `clientAsn`, `clientASNDescription`, `action`, `source`, `ruleId`, `clientRequestHTTPHost`, `clientRequestHTTPMethodName`, `clientRequestPath`, `userAgent`.
 
-   A field missing on the Free plan makes every run fail with `upstream` (GraphQL `errors[]`) until it is dropped from the query; `clientIP` missing stops NM-1 (back to the architect). If `maxPageSize` is below 5000/1000, set `netmon.cloudflare.groups-page-size` / `firewall-page-size`.
+   If Cloudflare later drops a field, every run fails with `upstream` (GraphQL `errors[]`) until the field is removed from the query. The design keeps 5-minute runs and at most 24 h per query and catch-up, so the 31-day history is not used yet. The page sizes 5000/1000 stay below the 10 000 maximum. A 30-day initial backfill is a follow-up.
 2. **Owner:** merge homelab#116 and run playbook 59. It adds the Secret keys `cloudflare-api-token` and `cloudflare-zone-id` to `data-service-secrets` (SOPS vars `data_service_cloudflare_analytics_token`, `data_service_cloudflare_zone_id`), plus the ServiceMonitor and the `NetmonCollectorStale` rule.
 3. **Merge this PR.** Flux rolls out the new image; Flyway applies V2 on startup.
 4. The env vars use `optional: true`. If step 2 has not run yet, the pod still starts; `cloudflare-requests` and `cloudflare-firewall` then fail every run with `lastErrorCode=credentials` in `/api/netmon/status`, never call out, and export no freshness gauge, so `NetmonCollectorStale` stays quiet. A running pod does not see Secret changes in env vars: after playbook 59 adds the keys, restart it once (`kubectl -n apps rollout restart deploy/data-service`, owner go).

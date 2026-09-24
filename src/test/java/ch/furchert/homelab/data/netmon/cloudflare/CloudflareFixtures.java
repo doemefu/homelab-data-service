@@ -20,7 +20,7 @@ public final class CloudflareFixtures {
                                double sampleInterval) {
         return """
                 {"count":%d,"avg":{"sampleInterval":%s},"dimensions":{"clientIP":"%s","clientCountryName":"DE",
-                 "clientAsn":"3320","clientASNDescription":"DTAG","clientRequestHTTPHost":"%s",
+                 "clientRequestHTTPHost":"%s",
                  "clientRequestHTTPMethodName":"%s","clientRequestPath":"%s","edgeResponseStatus":%d}}"""
                 .formatted(count, sampleInterval, ip, host, method, path, status);
     }

@@ -136,7 +136,9 @@ class InboundRequestsCollectorIntegrationTest extends AbstractIntegrationTest {
         assertThat(row.get("last_seen")).isEqualTo(ts("2026-09-23T10:28:00Z"));
         assertThat(row.get("seen_in")).isEqualTo("inbound");
         assertThat(row.get("country")).isEqualTo("DE");
-        assertThat(row.get("asn")).isEqualTo(3320);
+        // Request groups carry no ASN; it arrives with firewall events only.
+        assertThat(row.get("asn")).isNull();
+        assertThat(row.get("asn_org")).isNull();
         assertThat(jdbc.sql("SELECT count(*) FROM netmon.ip_enrichment").query(Long.class).single()).isEqualTo(2L);
     }
 

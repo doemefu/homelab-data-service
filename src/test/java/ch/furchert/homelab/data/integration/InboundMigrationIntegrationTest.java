@@ -38,6 +38,16 @@ class InboundMigrationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void inboundGroupsHaveNoAsnColumns() {
+        // httpRequestsAdaptiveGroups offers no ASN dimensions (probe 2026-09-24); ASN lives in ip_enrichment.
+        List<String> columns = jdbc.sql("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_schema = 'netmon' AND table_name = 'inbound_request_groups'
+                        """).query(String.class).list();
+        assertThat(columns).contains("client_ip", "country").doesNotContain("asn", "asn_org");
+    }
+
+    @Test
     void sampledIsGeneratedFromSampleInterval() {
         insertGroup("203.0.113.7", "/a", 1.0f);
         insertGroup("203.0.113.8", "/b", 10.0f);

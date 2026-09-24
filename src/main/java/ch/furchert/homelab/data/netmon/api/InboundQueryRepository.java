@@ -65,8 +65,8 @@ public class InboundQueryRepository {
                         SELECT host(r.client_ip) AS ip,
                                sum(r.request_count) AS requests,
                                coalesce(e.country, max(r.country)) AS country,
-                               coalesce(e.asn, max(r.asn))         AS asn,
-                               coalesce(e.asn_org, max(r.asn_org)) AS asn_org,
+                               e.asn                               AS asn,
+                               e.asn_org                           AS asn_org,
                                coalesce(e.blocklisted, false)      AS blocklisted,
                                e.abuseipdb_score                   AS abuse_score,
                                (SELECT count(*) FROM netmon.firewall_events f
@@ -102,14 +102,19 @@ public class InboundQueryRepository {
                 .list();
     }
 
+    /**
+     * Requests per ASN. Request groups carry no ASN (httpRequestsAdaptiveGroups does not offer it), so the ASN
+     * comes from {@code ip_enrichment}, which learns it from firewall events; IPs never seen there are not counted.
+     */
     public List<AsnCount> topAsns(GroupFilter filter, int limit) {
         return bind(jdbc.sql("""
-                        SELECT r.asn, max(r.asn_org) AS asn_org, sum(r.request_count) AS requests
+                        SELECT e.asn, max(e.asn_org) AS asn_org, sum(r.request_count) AS requests
                         FROM netmon.inbound_request_groups r
+                        JOIN netmon.ip_enrichment e ON e.ip = r.client_ip
                         WHERE """ + GROUPS_WHERE + """
-                          AND r.asn IS NOT NULL
-                        GROUP BY r.asn
-                        ORDER BY requests DESC, r.asn
+                          AND e.asn IS NOT NULL
+                        GROUP BY e.asn
+                        ORDER BY requests DESC, e.asn
                         LIMIT :limit
                         """), filter)
                 .param("limit", limit)

@@ -23,9 +23,9 @@ public class InboundRequestRepository {
 
     private static final String INSERT = """
             INSERT INTO netmon.inbound_request_groups
-                (window_start, window_end, is_final, client_ip, country, asn, asn_org, host, method, path,
+                (window_start, window_end, is_final, client_ip, country, host, method, path,
                  status, request_count, sample_interval, source)
-            VALUES (:windowStart, :windowEnd, :isFinal, CAST(:clientIp AS inet), :country, :asn, :asnOrg, :host,
+            VALUES (:windowStart, :windowEnd, :isFinal, CAST(:clientIp AS inet), :country, :host,
                     :method, :path, :status, :requestCount, :sampleInterval, :source)
             """;
 
@@ -56,8 +56,6 @@ public class InboundRequestRepository {
                         .addValue("isFinal", isFinal)
                         .addValue("clientIp", g.clientIp())
                         .addValue("country", g.country())
-                        .addValue("asn", g.asn())
-                        .addValue("asnOrg", g.asnOrg())
                         .addValue("host", g.host())
                         .addValue("method", g.method())
                         .addValue("path", g.path())
@@ -81,8 +79,6 @@ public class InboundRequestRepository {
             List<Object> key = List.of(g.clientIp(), g.host(), g.method(), g.path(), g.status());
             merged.merge(key, g, (a, b) -> new RequestGroup(a.clientIp(),
                     a.country() != null ? a.country() : b.country(),
-                    a.asn() != null ? a.asn() : b.asn(),
-                    a.asnOrg() != null ? a.asnOrg() : b.asnOrg(),
                     a.host(), a.method(), a.path(), a.status(),
                     a.count() + b.count(),
                     Math.max(a.sampleInterval(), b.sampleInterval())));

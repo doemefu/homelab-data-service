@@ -68,8 +68,8 @@ class CloudflareGraphqlClientTest {
         server.verify();
         assertThat(page.full()).isFalse();
         assertThat(page.items()).containsExactly(
-                new RequestGroup("203.0.113.7", "DE", 3320, "DTAG", "furchert.ch", "GET", "/de", 200, 120, 1.0),
-                new RequestGroup("2001:db8:0:0:0:0:0:1", "DE", 3320, "DTAG", "auth.furchert.ch", "POST", "/login", 401, 40, 10.0));
+                new RequestGroup("203.0.113.7", "DE", "furchert.ch", "GET", "/de", 200, 120, 1.0),
+                new RequestGroup("2001:db8:0:0:0:0:0:1", "DE", "auth.furchert.ch", "POST", "/login", 401, 40, 10.0));
     }
 
     @Test
@@ -90,7 +90,7 @@ class CloudflareGraphqlClientTest {
         server.expect(requestTo(URL)).andRespond(withSuccess("""
                 {"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[
                   {"count":5,"avg":{"sampleInterval":1},"dimensions":{"clientIP":"203.0.113.7","clientCountryName":"T1",
-                   "clientAsn":"","clientASNDescription":null,"clientRequestHTTPHost":"furchert.ch",
+                   "clientRequestHTTPHost":"furchert.ch",
                    "clientRequestHTTPMethodName":"GET","clientRequestPath":"%s","edgeResponseStatus":404}}]}]}}}
                 """.formatted(longPath), MediaType.APPLICATION_JSON));
 
@@ -98,8 +98,13 @@ class CloudflareGraphqlClientTest {
 
         assertThat(group.path()).hasSize(1024);
         assertThat(group.country()).isEqualTo("T1");
-        assertThat(group.asn()).isNull();
-        assertThat(group.asnOrg()).isNull();
+    }
+
+    @Test
+    void queryA_requestsNoAsnDimensions() {
+        // Settings probe 2026-09-24: httpRequestsAdaptiveGroups has no ASN dimensions; asking for one fails the query.
+        assertThat(CloudflareGraphqlClient.QUERY_GROUPS).doesNotContain("clientAsn").doesNotContain("clientASNDescription");
+        assertThat(CloudflareGraphqlClient.QUERY_FIREWALL).contains("clientAsn clientASNDescription");
     }
 
     @Test

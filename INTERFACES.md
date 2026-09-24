@@ -81,7 +81,8 @@ Aggregates of `inbound_request_groups` over the window (overlap filter `window_s
 
 - `sampled` is `true` if any contributing row had Cloudflare `sampleInterval > 1` (the UI shows "≈").
 - `timeline` buckets are 1 h up to a 7-day window, otherwise 1 d (UTC); only buckets with data are listed. `statuses` lists every status, ascending.
-- `topClientIps[].country/asn/asnOrg/blocklisted/abuseScore` come from `ip_enrichment`; `firewallEvents` counts that IP's firewall events in `[from, to)`.
+- `topClientIps[].country/asn/asnOrg/blocklisted/abuseScore` come from `ip_enrichment`; `firewallEvents` counts that IP's firewall events in `[from, to)` (with the same `host` filter).
+- **ASN comes from firewall events only.** Cloudflare's `httpRequestsAdaptiveGroups` offers no ASN dimensions on this zone (settings probe 2026-09-24). `asn`/`asnOrg` of an IP stay `null` until it appears in a firewall event, and `topAsns` counts only requests from such IPs.
 
 ### `GET /api/netmon/inbound/firewall-events?from&to&action&host&ip&limit&cursor` (§7.2)
 
@@ -138,7 +139,7 @@ The `NetmonCollectorStale` rule is owned by the infra repo (doemefu/homelab#116,
 |---|---|---|
 | PostgreSQL | `postgresql.apps.svc.cluster.local:5432`, DB `data_service`, role `data_service` | The netmon store; Flyway migrations on startup |
 | auth-service JWKS | `http://auth-service.apps.svc.cluster.local:8080/oauth2/jwks` | Token signature keys (fetched on the first request, then cached) |
-| Cloudflare GraphQL Analytics | `https://api.cloudflare.com/client/v4/graphql` (`api.cloudflare.com:443`) | `cloudflare-requests` (query A, `httpRequestsAdaptiveGroups`, every 5 min at :00) and `cloudflare-firewall` (query B, `firewallEventsAdaptive`, every 5 min at :30) for zone `CLOUDFLARE_ZONE_ID`, `Authorization: Bearer $CLOUDFLARE_API_TOKEN` (§4.2). Normal load 3 queries per 5 min, capped at 60 per run during catch-up. |
+| Cloudflare GraphQL Analytics | `https://api.cloudflare.com/client/v4/graphql` (`api.cloudflare.com:443`) | `cloudflare-requests` (query A, `httpRequestsAdaptiveGroups`, every 5 min at :00) and `cloudflare-firewall` (query B, `firewallEventsAdaptive`, every 5 min at :30) for zone `CLOUDFLARE_ZONE_ID`, `Authorization: Bearer $CLOUDFLARE_API_TOKEN` (§4.2). Probe limits (2026-09-24, both datasets): 31 d history, 30 d per query, 10 000 rows per page, 40 fields. Normal load 3 queries per 5 min, capped at 60 per run during catch-up. |
 | Spamhaus DROP v4 | `https://www.spamhaus.org/drop/drop_v4.json` (`www.spamhaus.org:443`) | `blocklists`, daily 05:00 UTC. NDJSON; Spamhaus sends no ETag, so `unchanged` is detected by sha256. |
 | FireHOL level1 | `https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset` (`raw.githubusercontent.com:443`) | `blocklists`, daily 05:00 UTC, `If-None-Match` with the stored ETag. Private/bogon ranges in the list are dropped. |
 | AbuseIPDB | `https://api.abuseipdb.com/api/v2/check` (`api.abuseipdb.com:443`) | `reputation`, every 30 min, **only when `ABUSEIPDB_API_KEY` is set** (not yet). ≤ 10 checks per run, ≤ 200 per UTC day; only public, non-blocklisted IPs that crossed a §4.5 threshold. |
@@ -151,7 +152,7 @@ These four are data-service's only outbound destinations outside the cluster (§
 |---|---|---|
 | Schema `netmon` | data-service | Created by Flyway |
 | `netmon.collector_state` | data-service | V1. One row per collector: high-water mark, cursor, attempt/success times, failure counter, `last_error` (class + short collector-authored message) and `last_error_code` (the §7.2 enum, enforced by a CHECK) |
-| `netmon.inbound_request_groups` | data-service | V2. Cloudflare request groups per hour; replaced per window, `is_final` once re-collected ≥ 15 min after the hour. Retention 90 d. |
+| `netmon.inbound_request_groups` | data-service | V2. Cloudflare request groups per hour, without ASN columns (not offered by the dataset); replaced per window, `is_final` once re-collected ≥ 15 min after the hour. Retention 90 d. |
 | `netmon.firewall_events` | data-service | V2. Raw Cloudflare firewall events; natural key `(ray_name, security_source, coalesce(rule_id,''), action)`. Retention 180 d. |
 | `netmon.ip_enrichment` | data-service | V2. One row per public IP: first/last seen, `seen_in`, Cloudflare geo/ASN, blocklist hits, AbuseIPDB score. Deleted 180 d after `last_seen`. |
 | `netmon.blocklist_snapshots` | data-service | V2. One row per fetch (`applied`/`unchanged`/`failed`). Retention 30 d, except snapshots still referenced by current entries. |

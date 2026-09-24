@@ -42,15 +42,15 @@ class InboundApiIntegrationTest extends AbstractIntegrationTest {
     void seed() {
         NetmonTables.clear(jdbc);
         jdbc.sql("""
-                INSERT INTO netmon.inbound_request_groups (window_start, window_end, is_final, client_ip, country, asn,
-                    asn_org, host, method, path, status, request_count, sample_interval, source)
-                VALUES ('2026-09-23T08:00:00Z', '2026-09-23T09:00:00Z', true, '203.0.113.7', 'DE', 3320, 'DTAG',
+                INSERT INTO netmon.inbound_request_groups (window_start, window_end, is_final, client_ip, country,
+                    host, method, path, status, request_count, sample_interval, source)
+                VALUES ('2026-09-23T08:00:00Z', '2026-09-23T09:00:00Z', true, '203.0.113.7', 'DE',
                         'furchert.ch', 'GET', '/de', 200, 120, 1, 'cloudflare-graphql'),
-                       ('2026-09-23T08:00:00Z', '2026-09-23T09:00:00Z', true, '203.0.113.7', 'DE', 3320, 'DTAG',
+                       ('2026-09-23T08:00:00Z', '2026-09-23T09:00:00Z', true, '203.0.113.7', 'DE',
                         'furchert.ch', 'GET', '/wp-login.php', 404, 5, 1, 'cloudflare-graphql'),
-                       ('2026-09-23T08:00:00Z', '2026-09-23T09:00:00Z', true, '198.51.100.9', 'US', 14061, 'DIGITALOCEAN',
+                       ('2026-09-23T08:00:00Z', '2026-09-23T09:00:00Z', true, '198.51.100.9', 'US',
                         'auth.furchert.ch', 'POST', '/login', 401, 7, 10, 'cloudflare-graphql'),
-                       ('2026-09-20T08:00:00Z', '2026-09-20T09:00:00Z', true, '203.0.113.7', 'DE', 3320, 'DTAG',
+                       ('2026-09-20T08:00:00Z', '2026-09-20T09:00:00Z', true, '203.0.113.7', 'DE',
                         'furchert.ch', 'GET', '/de', 200, 1, 1, 'cloudflare-graphql')
                 """).update();
         jdbc.sql("""

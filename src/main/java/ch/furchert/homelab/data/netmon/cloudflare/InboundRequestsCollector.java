@@ -165,7 +165,7 @@ public class InboundRequestsCollector implements NetmonCollector {
 
     private static List<Sighting> sightings(List<RequestGroup> groups, Instant from, Instant until) {
         return groups.stream()
-                .map(g -> new Sighting(g.clientIp(), from, until, g.country(), g.asn(), g.asnOrg()))
+                .map(g -> new Sighting(g.clientIp(), from, until, g.country(), null, null))
                 .toList();
     }
 

@@ -17,6 +17,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 
 ### Changed
 - The freshness gauge is registered only for collectors that are enabled and able to succeed. A collector switched off, `reputation` without a key, or a Cloudflare collector without credentials therefore cannot trip `NetmonCollectorStale`.
+- Cloudflare request groups carry no ASN (`httpRequestsAdaptiveGroups` does not offer it; probe 2026-09-24). `inbound_request_groups` has no `asn`/`asn_org` columns, and ASN reaches `ip_enrichment` from firewall events only.
 - `@EnableScheduling` moved to `SchedulingConfig` (`netmon.scheduling.enabled`, default `true`).
 
 ## [0.1.0] — 2026-09-23
