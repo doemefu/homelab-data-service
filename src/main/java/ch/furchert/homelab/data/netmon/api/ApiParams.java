@@ -53,6 +53,22 @@ final class ApiParams {
         throw NetmonApiException.invalidParameter("limit must be an integer between 1 and " + max);
     }
 
+    /** An optional TCP/UDP port filter, 1..65535. */
+    static Integer optionalPort(String value) {
+        if (blank(value)) {
+            return null;
+        }
+        try {
+            int port = Integer.parseInt(value.strip());
+            if (port >= 1 && port <= 65_535) {
+                return port;
+            }
+        } catch (NumberFormatException e) {
+            // fall through
+        }
+        throw NetmonApiException.invalidParameter("dport must be an integer between 1 and 65535");
+    }
+
     /** The canonical form of an IP literal; never resolves hostnames. */
     static String ip(String value) {
         return IpAddresses.canonical(value)

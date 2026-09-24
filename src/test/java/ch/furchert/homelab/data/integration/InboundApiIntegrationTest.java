@@ -259,7 +259,9 @@ class InboundApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.firewallEvents", hasSize(3)))
                 .andExpect(jsonPath("$.firewallEvents[0].rayName").value("ray-c"))
                 .andExpect(content().string(containsString("\"logins\":null")))
-                .andExpect(content().string(containsString("\"lan\":null")));
+                // NM-3: the lan block is always present; this IP has no LAN rows.
+                .andExpect(jsonPath("$.lan.ufwBlocks").value(0))
+                .andExpect(jsonPath("$.lan.sshFailed").value(0));
 
         call("/api/netmon/ips/203.0.113.7", "from", FROM, "to", TO)
                 .andExpect(status().isOk())

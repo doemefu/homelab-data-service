@@ -5,6 +5,11 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Added
+- NM-3 (#15): Flyway `V3__netmon_lan` with `lan_connection_snapshots`, `ufw_block_snapshots` and `ssh_auth_snapshots` (docs/060 §3.3).
+- Collector `lan`: every 15 min (:04/:19/:34/:49 UTC) snapshots the node-script metrics from Prometheus (`PROMETHEUS_URL`) per completed 15-minute window, replaced per `(window_start, node)`; bucket gauges only through instant selectors guarded by the bucket end; one retry at T+12m for a node that had not published yet; 48 h catch-up. Without any node exposing the metrics it succeeds with `lastErrorCode=upstream`.
+- `GET /api/netmon/lan/connections`, `/lan/ufw-blocks` (`lowerBound: true`) and `/lan/ssh-auth`; `/ips/{ip}` now returns `lan: {ufwBlocks, sshFailed}`.
+- Retention for the NM-3 tables (30/90/90 d); public LAN source IPs enter `ip_enrichment` with `seen_in` `lan`.
+- `k8s/deployment.yaml`: `PROMETHEUS_URL`.
 - NM-1 (#14): Flyway `V2__netmon_inbound` with `inbound_request_groups`, `firewall_events`, `ip_enrichment`, `blocklist_snapshots` and `blocklist_entries` (docs/060 §3.3).
 - Collectors `cloudflare-requests` (hourly request groups at 5-minute freshness, `is_final`, 5-minute slicing on full pages) and `cloudflare-firewall` (keyset-paged firewall events with a 10-minute overlap) against the Cloudflare GraphQL Analytics API.
 - Collector `blocklists`: daily Spamhaus DROP v4 and FireHOL level1 refresh with ETag/sha256 `unchanged` detection; private and bogon ranges are dropped.

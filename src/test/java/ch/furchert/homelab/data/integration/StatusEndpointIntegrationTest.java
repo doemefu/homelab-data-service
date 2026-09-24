@@ -76,11 +76,12 @@ class StatusEndpointIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void nm1CollectorsAreListedByNameAndReputationIsDisabledWithoutAKey() throws Exception {
+    void collectorsAreListedByNameAndReputationIsDisabledWithoutAKey() throws Exception {
         mockMvc.perform(get("/api/netmon/status").header("Authorization", bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.collectors[*].name", org.hamcrest.Matchers.contains(
-                        "blocklists", "cloudflare-firewall", "cloudflare-requests", "reputation", "retention")))
+                        "blocklists", "cloudflare-firewall", "cloudflare-requests", "lan", "reputation", "retention")))
+                .andExpect(jsonPath("$.collectors[?(@.name == 'lan')].enabled").value(true))
                 .andExpect(jsonPath("$.collectors[?(@.name == 'reputation')].enabled").value(false))
                 .andExpect(jsonPath("$.collectors[?(@.name == 'reputation')].stale").value(false))
                 .andExpect(jsonPath("$.collectors[?(@.name == 'cloudflare-requests')].enabled").value(true));

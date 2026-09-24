@@ -32,7 +32,7 @@ class InboundRetentionIntegrationTest extends AbstractIntegrationTest {
     @Test
     void registersTheFourNm1TablesWithContractDefaults() {
         assertThat(targets.orderedStream().map(t -> t.table() + ":" + t.timeColumn() + ":" + t.days()).toList())
-                .containsExactlyInAnyOrder("inbound_request_groups:window_start:90", "firewall_events:occurred_at:180",
+                .contains("inbound_request_groups:window_start:90", "firewall_events:occurred_at:180",
                         "ip_enrichment:last_seen:180", "blocklist_snapshots:fetched_at:30");
     }
 
