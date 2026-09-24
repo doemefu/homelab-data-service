@@ -10,7 +10,10 @@ import java.util.List;
  */
 final class EgressQueries {
 
-    static final String BYTES_SENT = "topk(500, sum by (node, container_id, destination, actual_destination) "
+    /** The §4.6 {@code topk} bound of {@link #BYTES_SENT}; a result this large may have lost series. */
+    static final int BYTES_SENT_TOP = 500;
+
+    static final String BYTES_SENT = "topk(" + BYTES_SENT_TOP + ", sum by (node, container_id, destination, actual_destination) "
             + "(increase(container_net_tcp_bytes_sent_total[1h])))";
     static final String BYTES_RECEIVED = "sum by (node, container_id, destination, actual_destination) "
             + "(increase(container_net_tcp_bytes_received_total[1h]))";

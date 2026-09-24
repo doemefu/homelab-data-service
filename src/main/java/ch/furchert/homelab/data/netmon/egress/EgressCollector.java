@@ -46,7 +46,7 @@ import java.util.regex.Pattern;
  * form their own row with {@code actual_destination = ''}. The FQDN comes from {@code ip_to_fqdn} (the
  * lexicographically first name of the post-NAT IP) or, for a destination coroot groups by name, is that name.
  * Rows beyond {@code netmon.egress.max-rows-per-window} are dropped by bytes sent, then connects, and the run
- * reports {@code truncated}. Each window is replaced as a whole.
+ * reports {@code truncated}; so does a window whose bytes-sent query returns its full {@code topk} of 500 series. Each window is replaced as a whole.
  *
  * <p>No agent publishing at the latest evaluation point (the DaemonSet is gated off or not scraped) is a successful
  * run with an {@code upstream} warning, like {@code lan}; the mark advances over the empty windows. Logs carry
@@ -61,7 +61,7 @@ public class EgressCollector implements NetmonCollector {
     static final Duration EVALUATION_DELAY = Duration.ofMinutes(5);
     static final Duration CATCH_UP = Duration.ofHours(48);
     static final String NO_AGENTS = "no node exposes the coroot egress metrics";
-    static final String TRUNCATED = " window(s) exceeded netmon.egress.max-rows-per-window";
+    static final String TRUNCATED = " window(s) exceeded netmon.egress.max-rows-per-window or the bytes-sent topk bound";
 
     private static final Pattern NODE = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,62}");
     private static final Logger log = LoggerFactory.getLogger(EgressCollector.class);
@@ -156,7 +156,10 @@ public class EgressCollector implements NetmonCollector {
         Instant start = end.minus(WINDOW);
         Map<Key, Counters> flows = new LinkedHashMap<>();
         Dropped dropped = new Dropped();
-        add(prometheus.query(EgressQueries.BYTES_SENT, end), flows, dropped, (c, v) -> c.bytesSent += v);
+        List<PrometheusSample> sent = prometheus.query(EgressQueries.BYTES_SENT, end);
+        // At the topk bound, flows outside the top 500 by bytes sent show 0 bytes sent: report it as truncated.
+        boolean sentCapped = sent.size() >= EgressQueries.BYTES_SENT_TOP;
+        add(sent, flows, dropped, (c, v) -> c.bytesSent += v);
         add(prometheus.query(EgressQueries.BYTES_RECEIVED, end), flows, dropped, (c, v) -> c.bytesReceived += v);
         add(prometheus.query(EgressQueries.CONNECTS, end), flows, dropped, (c, v) -> c.connects += v);
         List<PrometheusSample> failed = prometheus.query(EgressQueries.FAILED_CONNECTS, end);
@@ -172,8 +175,8 @@ public class EgressCollector implements NetmonCollector {
                 .thenComparing(EgressFlow::containerId)
                 .thenComparing(EgressFlow::destination)
                 .thenComparing(EgressFlow::actualDestination));
-        boolean truncated = rows.size() > properties.maxRowsPerWindow();
-        List<EgressFlow> kept = truncated ? rows.subList(0, properties.maxRowsPerWindow()) : rows;
+        boolean overCap = rows.size() > properties.maxRowsPerWindow();
+        List<EgressFlow> kept = overCap ? rows.subList(0, properties.maxRowsPerWindow()) : rows;
         repository.replace(start, kept);
 
         List<Sighting> sightings = new ArrayList<>();
@@ -186,10 +189,14 @@ public class EgressCollector implements NetmonCollector {
         if (dropped.count > 0) {
             log.warn("[{}] window end={} dropped {} series with unexpected labels or values", NAME, end, dropped.count);
         }
-        if (truncated) {
+        if (overCap) {
             log.warn("[{}] window end={} kept {} of {} rows", NAME, end, kept.size(), rows.size());
         }
-        return truncated;
+        if (sentCapped) {
+            log.warn("[{}] window end={} bytes-sent query hit its topk bound of {}", NAME, end,
+                    EgressQueries.BYTES_SENT_TOP);
+        }
+        return overCap || sentCapped;
     }
 
     /** Merges one flow query into {@code flows}; the value is added to the counter chosen by {@code into}. */

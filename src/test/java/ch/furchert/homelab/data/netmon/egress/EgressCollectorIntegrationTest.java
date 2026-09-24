@@ -231,6 +231,25 @@ class EgressCollectorIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void bytesSentAtItsTopkBoundWarnsTruncated() {
+        state.updateWindowEnd(EgressCollector.NAME, PREVIOUS_END);
+        var sent = new ch.furchert.homelab.data.netmon.prometheus.PrometheusSample[EgressQueries.BYTES_SENT_TOP];
+        for (int i = 0; i < sent.length; i++) {
+            sent[i] = sample(1000 - i, flow("mba1", LITELLM, "34.117." + (i / 250) + "." + (i % 250) + ":443", ""));
+        }
+        FakePrometheus prometheus = new FakePrometheus()
+                .on(EgressQueries.BYTES_SENT, T, sent)
+                .on(EgressQueries.AGENTS, T, sample(1, "node", "mba1"));
+
+        assertThat(runner.run(collector(prometheus))).isTrue();
+
+        assertThat(jdbc.sql("SELECT count(*) FROM netmon.egress_flow_snapshots").query(Long.class).single()).isEqualTo(500L);
+        CollectorState row = state.find(EgressCollector.NAME).orElseThrow();
+        assertThat(row.lastErrorCode()).isEqualTo("truncated");
+        assertThat(row.consecutiveFailures()).isZero();
+    }
+
+    @Test
     void withoutAnyAgentTheRunSucceedsWithAnUpstreamWarningAndAdvances() {
         state.updateWindowEnd(EgressCollector.NAME, PREVIOUS_END);
 
