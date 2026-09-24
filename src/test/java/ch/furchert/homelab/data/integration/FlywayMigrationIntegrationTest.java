@@ -27,14 +27,14 @@ class FlywayMigrationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void netmonHoldsTheV1ToV4TablesOnly() {
+    void netmonHoldsTheV1ToV5TablesOnly() {
         // V1 = collector_state; V2 (NM-1) = the inbound tables; V3 (NM-3) = the LAN tables; V4 (NM-2) = egress;
-        // NM-4 follows (docs/060 §3.4).
+        // V5 (NM-4) = login events (docs/060 §3.4).
         List<String> tables = jdbc.sql("SELECT table_name FROM information_schema.tables WHERE table_schema = 'netmon'")
                 .query(String.class).list();
         assertThat(tables).containsExactlyInAnyOrder("collector_state", "inbound_request_groups", "firewall_events",
                 "ip_enrichment", "blocklist_snapshots", "blocklist_entries", "lan_connection_snapshots",
-                "ufw_block_snapshots", "ssh_auth_snapshots", "egress_flow_snapshots");
+                "ufw_block_snapshots", "ssh_auth_snapshots", "egress_flow_snapshots", "login_events");
     }
 
     @Test

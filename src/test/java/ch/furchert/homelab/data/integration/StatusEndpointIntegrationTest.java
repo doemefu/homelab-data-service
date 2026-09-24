@@ -80,8 +80,10 @@ class StatusEndpointIntegrationTest extends AbstractIntegrationTest {
         mockMvc.perform(get("/api/netmon/status").header("Authorization", bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.collectors[*].name", org.hamcrest.Matchers.contains(
-                        "blocklists", "cloudflare-firewall", "cloudflare-requests", "egress", "lan", "reputation",
-                        "retention")))
+                        "blocklists", "cloudflare-firewall", "cloudflare-requests", "egress", "lan", "login-events",
+                        "reputation", "retention")))
+                // Without AUTH_CLIENT_SECRET login-events still runs (and reports credentials): it is enabled.
+                .andExpect(jsonPath("$.collectors[?(@.name == 'login-events')].enabled").value(true))
                 .andExpect(jsonPath("$.collectors[?(@.name == 'lan')].enabled").value(true))
                 .andExpect(jsonPath("$.collectors[?(@.name == 'egress')].enabled").value(true))
                 .andExpect(jsonPath("$.collectors[?(@.name == 'reputation')].enabled").value(false))

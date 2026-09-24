@@ -47,10 +47,10 @@ public final class InboundDtos {
     public record FirewallEventPage(List<FirewallEventItem> items, String nextCursor) {
     }
 
-    /** {@code logins} is {@code null} until NM-4 ships. */
+    /** {@code logins} (NM-4) and {@code lan} (NM-3) count the IP's activity in the window. */
     public record IpDetail(String ip, Instant firstSeen, Instant lastSeen, List<String> seenIn, String country,
                            Integer asn, String asnOrg, List<BlocklistHit> blocklists, AbuseIpDb abuseIpDb,
-                           IpInbound inbound, List<FirewallEventItem> firewallEvents, Object logins,
+                           IpInbound inbound, List<FirewallEventItem> firewallEvents, LoginDtos.IpLoginCounts logins,
                            LanDtos.IpLan lan) {
     }
 

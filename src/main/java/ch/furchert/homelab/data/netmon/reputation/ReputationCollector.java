@@ -28,9 +28,9 @@ import java.util.List;
  *   <li>Budget: {@code daily-budget} checks per UTC day, {@code per-run} per run; the day's count lives in
  *       {@code collector_state.cursor} as {@code YYYY-MM-DD:count}.</li>
  *   <li>Candidates: not blocklisted, never checked or checked more than 7 d ago, and meeting one threshold,
- *       in priority order — (2) a firewall event other than skip/log in 24 h, (3) ≥ 50 requests in 24 h
- *       with ≥ 50 % status ≥ 400, (4) top 5 by requests in 24 h. Threshold (1), failed logins, arrives
- *       with the NM-4 {@code login_events} table.</li>
+ *       in priority order — (1) a {@code failure} or {@code locked} login in 24 h, (2) a firewall event other
+ *       than skip/log in 24 h, (3) ≥ 50 requests in 24 h with ≥ 50 % status ≥ 400, (4) top 5 by requests in
+ *       24 h.</li>
  *   <li>A 429 stops the run and marks the day's budget as exhausted; 401/403 and an unreachable AbuseIPDB
  *       stop the run. A failure specific to one IP (other HTTP errors, an incomplete body) counts against
  *       the budget, sets {@code abuseipdb_checked_at} without a score so the IP rests for 7 days, and the
@@ -49,6 +49,13 @@ public class ReputationCollector implements NetmonCollector {
                 SELECT e.ip FROM netmon.ip_enrichment e
                 WHERE NOT e.blocklisted
                   AND (e.abuseipdb_checked_at IS NULL OR e.abuseipdb_checked_at < CAST(:now AS timestamptz) - interval '7 days')
+            ),
+            logins AS (
+                SELECT l.client_ip AS ip, 1 AS priority, count(*) AS weight
+                FROM netmon.login_events l
+                WHERE l.occurred_at >= CAST(:now AS timestamptz) - interval '24 hours'
+                  AND l.outcome IN ('failure', 'locked') AND l.client_ip IS NOT NULL
+                GROUP BY l.client_ip
             ),
             firewall AS (
                 SELECT f.client_ip AS ip, 2 AS priority, count(*) AS weight
@@ -72,7 +79,7 @@ public class ReputationCollector implements NetmonCollector {
             ),
             ranked AS (
                 SELECT c.ip, min(c.priority) AS priority, max(c.weight) AS weight
-                FROM (SELECT * FROM firewall UNION ALL SELECT * FROM error_heavy UNION ALL SELECT * FROM top_talkers) c
+                FROM (SELECT * FROM logins UNION ALL SELECT * FROM firewall UNION ALL SELECT * FROM error_heavy UNION ALL SELECT * FROM top_talkers) c
                 JOIN eligible USING (ip)
                 GROUP BY c.ip
             )

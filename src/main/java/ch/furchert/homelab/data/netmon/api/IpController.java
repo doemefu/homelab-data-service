@@ -20,7 +20,7 @@ import java.util.List;
 /**
  * {@code GET /api/netmon/ips/{ip}} (docs/060 §7.2): enrichment, blocklist hits, AbuseIPDB and recent
  * activity of one IP. Default window 7 d; a malformed IP is 400, an IP never seen is 404.
- * {@code lan} (NM-3) sums UFW blocks and unsuccessful SSH attempts; {@code logins} stays {@code null} until NM-4.
+ * {@code lan} (NM-3) sums UFW blocks and unsuccessful SSH attempts; {@code logins} (NM-4) counts login outcomes.
  */
 @RestController
 @RequestMapping("/api/netmon/ips")
@@ -31,11 +31,14 @@ public class IpController {
 
     private final InboundQueryRepository queries;
     private final LanQueryRepository lanQueries;
+    private final LoginQueryRepository loginQueries;
     private final Clock clock;
 
-    public IpController(InboundQueryRepository queries, LanQueryRepository lanQueries, Clock clock) {
+    public IpController(InboundQueryRepository queries, LanQueryRepository lanQueries,
+                        LoginQueryRepository loginQueries, Clock clock) {
         this.queries = queries;
         this.lanQueries = lanQueries;
+        this.loginQueries = loginQueries;
         this.clock = clock;
     }
 
@@ -57,6 +60,7 @@ public class IpController {
                 .stream().map(FirewallRow::item).toList();
         return new IpDetail(enrichment.ip(), enrichment.firstSeen(), enrichment.lastSeen(), enrichment.seenIn(),
                 enrichment.country(), enrichment.asn(), enrichment.asnOrg(), queries.blocklistHits(ip),
-                enrichment.abuseIpDb(), inbound, firewall, null, lanQueries.ipSummary(window, ip));
+                enrichment.abuseIpDb(), inbound, firewall, loginQueries.ipSummary(window, ip),
+                lanQueries.ipSummary(window, ip));
     }
 }

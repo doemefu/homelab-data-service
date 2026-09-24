@@ -110,6 +110,37 @@ class ReputationCollectorIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void aFailedLoginIn24HoursRanksFirst() {
+        java.time.OffsetDateTime now = java.time.OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        // E: one locked login 1 h ago (priority 1); a success and a 25 h old failure do not qualify.
+        jdbc.sql("""
+                INSERT INTO netmon.ip_enrichment (ip, first_seen, last_seen, seen_in, blocklist_hits, blocklisted, source)
+                VALUES ('198.51.100.5', now(), now(), ARRAY['login'], '[]', false, 'auth-service'),
+                       ('198.51.100.6', now(), now(), ARRAY['login'], '[]', false, 'auth-service')
+                """).update();
+        jdbc.sql("""
+                INSERT INTO netmon.login_events (event_id, occurred_at, outcome, client_ip, ip_source, username_hmac,
+                    subject, source_service, source)
+                VALUES (gen_random_uuid(), CAST(? AS timestamptz) - interval '1 hour', 'locked', '198.51.100.5',
+                        'cf-connecting-ip', repeat('a', 64), NULL, 'auth-service', 'auth-service'),
+                       (gen_random_uuid(), CAST(? AS timestamptz) - interval '1 hour', 'success', '198.51.100.6',
+                        'cf-connecting-ip', repeat('a', 64), 'dominic', 'auth-service', 'auth-service'),
+                       (gen_random_uuid(), CAST(? AS timestamptz) - interval '25 hours', 'failure', '198.51.100.6',
+                        'cf-connecting-ip', repeat('a', 64), NULL, 'auth-service', 'auth-service')
+                """).param(now).param(now).param(now).update();
+
+        collector("key-1", 2, 200, s -> {
+            s.expect(requestTo(URL + "?ipAddress=198.51.100.5&maxAgeInDays=90"))
+                    .andRespond(withSuccess(body(90, 10), MediaType.APPLICATION_JSON));
+            s.expect(requestTo(URL + "?ipAddress=198.51.100.1&maxAgeInDays=90"))
+                    .andRespond(withSuccess(body(87, 412), MediaType.APPLICATION_JSON));
+        }).collect();
+
+        assertThat(jdbc.sql("SELECT abuseipdb_checked_at IS NULL FROM netmon.ip_enrichment WHERE ip = '198.51.100.6'")
+                .query(Boolean.class).single()).isTrue();
+    }
+
+    @Test
     void aFailureSpecificToOneIpIsCountedAndSkipped() {
         collector("key-1", 10, 200, s -> {
             s.expect(requestTo(URL + "?ipAddress=198.51.100.1&maxAgeInDays=90"))

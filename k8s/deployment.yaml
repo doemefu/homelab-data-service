@@ -58,8 +58,8 @@ spec:
                   name: data-service-secrets
                   key: cloudflare-zone-id
                   optional: true
-            # docs/060 §4.5: absent until the owner approves an AbuseIPDB key; the reputation collector
-            # stays disabled while it is unset.
+            # docs/060 §4.5: optional; set via playbook 59 (doemefu/homelab#146). The reputation collector
+            # is disabled while the key is absent.
             - name: ABUSEIPDB_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -69,6 +69,21 @@ spec:
             # NM-3 (docs/060 §4.6, §9): source of the node-script LAN metrics; cluster-internal, no credentials.
             - name: PROMETHEUS_URL
               value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+            # NM-4 (docs/060 §7.6, §9): the login-event pull from auth-service. The Secret key is added by
+            # doemefu/homelab#134 (playbook 59). optional: true keeps the pod starting without it; the login-events
+            # collector then reports lastErrorCode=credentials in /api/netmon/status instead of calling out.
+            - name: AUTH_TOKEN_URL
+              value: "http://auth-service.apps.svc.cluster.local:8080/oauth2/token"
+            - name: AUTH_SERVICE_URL
+              value: "http://auth-service.apps.svc.cluster.local:8080"
+            - name: AUTH_CLIENT_ID
+              value: "data-service"
+            - name: AUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: data-service-secrets
+                  key: auth-client-secret
+                  optional: true
             # docs/060 §9 baseline, except MaxMetaspaceSize: NM-0 alone measured ~56 MB of metaspace
             # after startup and first requests (87% of the 64m baseline), so the cap is 96m.
             - name: JAVA_TOOL_OPTIONS
