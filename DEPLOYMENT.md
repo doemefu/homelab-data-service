@@ -81,6 +81,26 @@ $PSQL "select collector, last_success_at, last_window_end, consecutive_failures,
 
 The first blocklist refresh runs at the next 05:00 UTC. There is no manual trigger in v1 (§7.3), so the blocklist checks above pass only after that run.
 
+## NM-3 rollout (#15): LAN snapshots
+
+NM-3 adds the `lan` collector, the migration `V3__netmon_lan` (three tables, additive) and `PROMETHEUS_URL` (a plain value, no Secret). Order across repos (docs/060 §11): **doemefu/homelab#117 role rollout → this repo's #15 PR → doemefu/furchert-ch#62**. This PR does not depend on the role at merge time.
+
+1. **Merge this PR.** Flux rolls out the new image; Flyway applies V3 on startup.
+2. **Until the owner runs `10_base.yml --tags netmon_node`** (doemefu/homelab#117, needs the LAN), no node exposes the metrics. `lan` still succeeds every 15 min, advances its high-water mark and reports `lastErrorCode=upstream` with `consecutiveFailures: 0` in `/api/netmon/status`. Its freshness gauge is set on every run, so `NetmonCollectorStale` (90 min class) stays quiet; the WARN line `[lan] run completed with warning: code=upstream warning=CollectorWarning: no node exposes the homelab_netmon metrics` is expected.
+3. After the role rollout, the next run (at most 15 min later) writes rows and `lastErrorCode` becomes `null`. It also backfills up to 48 h, but only from when the script started publishing.
+
+**How windows are finalised (§4.6).** For the window `[T-15m, T)`, connections are evaluated at `T`, and node discovery plus the guarded bucket queries at `T+4m`. A node exposing `homelab_netmon_last_success_timestamp_seconds` is expected; it has published when its `homelab_netmon_bucket_end_timestamp_seconds` equals `T`. An expected node that has not published by `T+4m` holds the high-water mark and is re-checked once at `T+12m` (next run). If it still has not published then, the window is final without bucket rows for that node (WARN `[lan] window end=… not published by nodes=[…]`), and the mark moves on. A node whose series are gone entirely, such as a rebooting MacBook, is not expected and does not block anything. Its connection samples from the window are still written.
+
+### Verification (§11 NM-3)
+
+```bash
+PSQL='kubectl -n apps exec postgresql-0 -c postgresql -- psql -U postgres -d data_service -c'
+$PSQL "select version, success from public.flyway_schema_history_data order by installed_rank"     # 1, 2 and 3
+$PSQL "select collector, last_success_at, last_window_end, consecutive_failures, last_error_code from netmon.collector_state where collector = 'lan'"
+$PSQL "select node, dport, src_ip, max(peak_connections) from netmon.lan_connection_snapshots where dport = 1883 group by 1,2,3 order by 1,3"   # mosquitto clients by LAN IP
+$PSQL "select window_start, node, sum(blocks) from netmon.ufw_block_snapshots group by 1,2 order by 1 desc limit 8"   # a test block appears within 30 min
+```
+
 ## Verification (§11 NM-0)
 
 ```bash
@@ -122,5 +142,8 @@ A token without `netmon:read` must get 403.
 | `/status`: `cloudflare-*` with `lastErrorCode=credentials` | `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID` empty (Secret keys missing, or pod not restarted after playbook 59), token revoked/expired, or the token lacks Analytics:Read (firewall events may also need Firewall Services:Read, §4.2) |
 | `/status`: `cloudflare-*` with `lastErrorCode=upstream` | Cloudflare 5xx/unreachable, or GraphQL `errors[]` — the WARN log line `[cloudflare] GraphQL errors: … first=…` names the problem (typically a field not available on the plan) |
 | `/status`: `lastErrorCode=rate_limited` | Cloudflare 429; runs back off exponentially up to 30 min |
+| `/status`: `lan` with `lastErrorCode=upstream` and 0 failures | No node exposes the NM-3 metrics: the `netmon_node` role is not rolled out (doemefu/homelab#117) or node-exporter is not scraping its textfile directory. Check `max by (node) (homelab_netmon_last_success_timestamp_seconds)` in Prometheus |
+| `/status`: `lan` with `lastErrorCode=upstream` and failures > 0 | Prometheus unreachable or answering 5xx (`PROMETHEUS_URL`); runs back off up to 30 min and catch up afterwards (48 h cap) |
+| `/status`: `lan` with `lastErrorCode=internal` | Prometheus rejected a query (HTTP 400/422 `bad_data`), a data-service bug |
 | `/status`: `lastErrorCode=truncated` with 0 failures | A 5-minute slice or a firewall page hit the page limit; data was written, the window may be incomplete |
 | `/status`: `blocklists` with `upstream` | One list failed to download or parse; see `netmon.blocklist_snapshots.error`. The previous entries stay active |
