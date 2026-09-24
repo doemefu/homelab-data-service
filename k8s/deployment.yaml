@@ -41,6 +41,31 @@ spec:
               value: "https://auth.furchert.ch"
             - name: JWKS_URI
               value: "http://auth-service.apps.svc.cluster.local:8080/oauth2/jwks"
+            # NM-1 (docs/060 §4.2, §9). The Secret keys are added by doemefu/homelab#116 (playbook 59).
+            # optional: true keeps the pod starting before that; the Cloudflare collectors then report
+            # lastErrorCode=credentials in /api/netmon/status instead of calling out.
+            - name: CLOUDFLARE_GRAPHQL_URL
+              value: "https://api.cloudflare.com/client/v4/graphql"
+            - name: CLOUDFLARE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: data-service-secrets
+                  key: cloudflare-api-token
+                  optional: true
+            - name: CLOUDFLARE_ZONE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: data-service-secrets
+                  key: cloudflare-zone-id
+                  optional: true
+            # docs/060 §4.5: absent until the owner approves an AbuseIPDB key; the reputation collector
+            # stays disabled while it is unset.
+            - name: ABUSEIPDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: data-service-secrets
+                  key: abuseipdb-api-key
+                  optional: true
             # docs/060 §9 baseline, except MaxMetaspaceSize: NM-0 alone measured ~56 MB of metaspace
             # after startup and first requests (87% of the 64m baseline), so the cap is 96m.
             - name: JAVA_TOOL_OPTIONS

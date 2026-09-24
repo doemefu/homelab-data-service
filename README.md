@@ -15,8 +15,8 @@ Neither ADR is in a git repository yet. Both live in the homelab parent workspac
 
 | Sub-project | Scope | State |
 |---|---|---|
-| NM-0 (#13) | Spring Boot skeleton, Flyway `V1__netmon_baseline`, JWT resource server, `GET /api/netmon/status`, collector runner + retention skeleton + freshness gauge, image/CI/k8s | this bootstrap |
-| NM-1 (#14) | Cloudflare collector, IP enrichment, inbound read API | planned |
+| NM-0 (#13) | Spring Boot skeleton, Flyway `V1__netmon_baseline`, JWT resource server, `GET /api/netmon/status`, collector runner + retention skeleton + freshness gauge, image/CI/k8s | deployed 2026-09-23 (PR #18) |
+| NM-1 (#14) | Flyway `V2__netmon_inbound`; Cloudflare request-group and firewall-event collectors, Spamhaus/FireHOL blocklists, IP enrichment, AbuseIPDB path (disabled until a key exists); `GET /api/netmon/inbound/summary`, `GET /api/netmon/inbound/firewall-events`, `GET /api/netmon/ips/{ip}` | in review |
 | NM-3 (#15) | LAN snapshot collector + API | planned |
 | NM-2 (#16) | Egress snapshot collector + API | planned |
 | NM-4 (#17) | Login-event puller + API | planned |

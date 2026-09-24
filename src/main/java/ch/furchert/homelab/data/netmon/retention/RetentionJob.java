@@ -16,7 +16,7 @@ import java.util.List;
 /**
  * Daily retention (docs/060 §3.5): for every registered {@link RetentionTarget}, delete rows older than
  * its retention in batches of 5 000 until none are left, logging only {@code [retention] <table> deleted=<n>}.
- * NM-0 ships the mechanics and no targets; each sub-project adds the targets for its own tables.
+ * Each sub-project registers the targets for its own tables (NM-1: {@code InboundRetentionConfig}).
  * The job never truncates, and the API has no manual deletion path.
  */
 @Component
@@ -78,9 +78,11 @@ public class RetentionJob implements NetmonCollector {
 
     private long purge(RetentionTarget target) {
         // Identifiers are validated by RetentionTarget; only the day count is a bind parameter.
+        // The guard, if any, is a fixed SQL fragment from code on the alias t.
         String sql = "DELETE FROM netmon." + target.table()
-                + " WHERE ctid IN (SELECT ctid FROM netmon." + target.table()
-                + " WHERE " + target.timeColumn() + " < now() - make_interval(days => :days)"
+                + " WHERE ctid IN (SELECT t.ctid FROM netmon." + target.table() + " t"
+                + " WHERE t." + target.timeColumn() + " < now() - make_interval(days => :days)"
+                + (target.guard() == null ? "" : " AND (" + target.guard() + ")")
                 + " LIMIT " + BATCH_SIZE + ")";
         long total = 0;
         int deleted;

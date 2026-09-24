@@ -49,3 +49,12 @@ netmon:
   api:
     # docs/060 §7.5 (v1): only these token subjects may read /api/netmon/**.
     allowed-clients: [ furchert-ch ]
+  # docs/060 §4.2, §9. Token and zone id come from Secret data-service-secrets; blank = the
+  # Cloudflare collectors report `credentials` instead of calling out.
+  cloudflare:
+    graphql-url: ${CLOUDFLARE_GRAPHQL_URL:https://api.cloudflare.com/client/v4/graphql}
+    api-token: ${CLOUDFLARE_API_TOKEN:}
+    zone-id: ${CLOUDFLARE_ZONE_ID:}
+  # docs/060 §4.5: the reputation collector stays unavailable while the key is blank.
+  abuseipdb:
+    api-key: ${ABUSEIPDB_API_KEY:}

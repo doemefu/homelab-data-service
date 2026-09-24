@@ -26,6 +26,13 @@ public class ProblemDetailsAdvice extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ProblemDetailsAdvice.class);
 
+    @ExceptionHandler(NetmonApiException.class)
+    public ResponseEntity<Object> handleApiError(NetmonApiException ex, WebRequest request) {
+        ProblemDetail body = ProblemDetail.forStatusAndDetail(ex.status(), ex.getMessage());
+        body.setProperty("code", ex.code());
+        return handleExceptionInternal(ex, body, new HttpHeaders(), ex.status(), request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Object> handleUnexpected(Exception ex, WebRequest request) {
         log.error("Unhandled exception", ex);

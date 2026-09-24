@@ -20,6 +20,13 @@ class MetricsIntegrationTest extends AbstractIntegrationTest {
     void freshnessGaugeIsExportedForEveryRegisteredCollector() throws Exception {
         mockMvc.perform(get("/actuator/prometheus"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("netmon_collector_last_success_timestamp_seconds{collector=\"retention\"")));
+                .andExpect(content().string(containsString("netmon_collector_last_success_timestamp_seconds{collector=\"retention\"")))
+                // Startup registration rules (disabled / unavailable / unconfigured) are unit-tested in
+                // CollectorMetricsInitializerTest; this shared context also runs collectors in other test classes.
+                .andExpect(content().string(containsString("netmon_collector_last_success_timestamp_seconds{collector=\"blocklists\"")))
+                // reputation cannot run without an AbuseIPDB key, so it exports no (permanently NaN) gauge.
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("collector=\"reputation\""))))
+                // No IP-level label ever reaches the scrape (docs/060 §7.1).
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("ipAddress"))));
     }
 }

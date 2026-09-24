@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 
 /** Upsert-only access to {@code netmon.collector_state}; a row is created on a collector's first run. */
 @Repository
@@ -28,6 +29,39 @@ public class CollectorStateRepository {
                         """)
                 .query(CollectorStateRepository::mapRow)
                 .list();
+    }
+
+    public Optional<CollectorState> find(String collector) {
+        return jdbc.sql("""
+                        SELECT collector, last_window_end, cursor, last_attempt_at, last_success_at,
+                               consecutive_failures, last_error, last_error_code
+                        FROM netmon.collector_state
+                        WHERE collector = :collector
+                        """)
+                .param("collector", collector)
+                .query(CollectorStateRepository::mapRow)
+                .optional();
+    }
+
+    /** Advances (or sets) the high-water mark; called by a collector as it completes windows. */
+    public void updateWindowEnd(String collector, Instant windowEnd) {
+        jdbc.sql("""
+                        INSERT INTO netmon.collector_state (collector, last_window_end) VALUES (:collector, :end)
+                        ON CONFLICT (collector) DO UPDATE SET last_window_end = EXCLUDED.last_window_end
+                        """)
+                .param("collector", collector)
+                .param("end", utc(windowEnd))
+                .update();
+    }
+
+    public void updateCursor(String collector, String cursor) {
+        jdbc.sql("""
+                        INSERT INTO netmon.collector_state (collector, cursor) VALUES (:collector, :cursor)
+                        ON CONFLICT (collector) DO UPDATE SET cursor = EXCLUDED.cursor
+                        """)
+                .param("collector", collector)
+                .param("cursor", cursor)
+                .update();
     }
 
     public void recordAttempt(String collector, Instant at) {
@@ -52,6 +86,25 @@ public class CollectorStateRepository {
                         """)
                 .param("collector", collector)
                 .param("at", utc(at))
+                .update();
+    }
+
+    /** A successful run that still reports a warning code (e.g. {@code truncated}) to the status API. */
+    public void recordSuccess(String collector, Instant at, ErrorCode warningCode, String warning) {
+        jdbc.sql("""
+                        INSERT INTO netmon.collector_state
+                            (collector, last_success_at, consecutive_failures, last_error, last_error_code)
+                        VALUES (:collector, :at, 0, :error, :code)
+                        ON CONFLICT (collector) DO UPDATE SET
+                            last_success_at = EXCLUDED.last_success_at,
+                            consecutive_failures = 0,
+                            last_error = EXCLUDED.last_error,
+                            last_error_code = EXCLUDED.last_error_code
+                        """)
+                .param("collector", collector)
+                .param("at", utc(at))
+                .param("error", warning)
+                .param("code", warningCode.value())
                 .update();
     }
 
