@@ -43,7 +43,7 @@ class EgressCollectorIntegrationTest extends AbstractIntegrationTest {
 
     private static final String LITELLM = "/k8s/apps/litellm-5d8f7c9b6-x2k9p/litellm";
     private static final String FURCHERT = "/k8s/apps/furchert-ch-7fb9c6d48-m4n5q/furchert-ch";
-    private static final String AUTH = "/k8s/apps/n8n-6c8d9f7b5-q8w2z/n8n";
+    private static final String N8N = "/k8s/apps/n8n-6c8d9f7b5-q8w2z/n8n";
     private static final String FLUX = "/k8s/flux-system/source-controller-6b8d9f7c5-x7kqp/manager";
     private static final String K3S = "/system.slice/k3s.service";
 
@@ -100,7 +100,7 @@ class EgressCollectorIntegrationTest extends AbstractIntegrationTest {
                         // No success row at all.
                         sample(1, flow("mba1", LITELLM, "203.0.113.50:443", null)),
                         // Ambiguous: two backends behind the same Service.
-                        sample(4, flow("raspi5", AUTH, "10.43.0.20:5678", null)))
+                        sample(4, flow("raspi5", N8N, "10.43.0.20:5678", null)))
                 .on(EgressQueries.FQDN, T,
                         sample(1, "ip", "34.117.59.81", "fqdn", "b.example.com"),
                         sample(1, "ip", "34.117.59.81", "fqdn", "a.example.com."),
@@ -109,8 +109,8 @@ class EgressCollectorIntegrationTest extends AbstractIntegrationTest {
                         sample(1, flow("mba1", LITELLM, "api.anthropic.com:443", null)),
                         // First sample inside the window: only the presence query sees it.
                         sample(1, flow("raspi5", FLUX, "140.82.121.3:443", "140.82.121.3:443")),
-                        sample(1, flow("raspi5", AUTH, "10.43.0.20:5678", "10.42.1.8:5678")),
-                        sample(1, flow("raspi5", AUTH, "10.43.0.20:5678", "10.42.2.9:5678")))
+                        sample(1, flow("raspi5", N8N, "10.43.0.20:5678", "10.42.1.8:5678")),
+                        sample(1, flow("raspi5", N8N, "10.43.0.20:5678", "10.42.2.9:5678")))
                 .on(EgressQueries.AGENTS, T, sample(10, "node", "raspi5"), sample(20, "node", "mba1"));
     }
 
