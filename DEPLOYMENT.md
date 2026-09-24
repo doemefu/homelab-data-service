@@ -81,6 +81,26 @@ $PSQL "select collector, last_success_at, last_window_end, consecutive_failures,
 
 The first blocklist refresh runs at the next 05:00 UTC. There is no manual trigger in v1 (§7.3), so the blocklist checks above pass only after that run.
 
+## NM-2 rollout (#16): egress snapshots
+
+NM-2 adds the `egress` collector and the migration `V4__netmon_egress` (one table, additive). It needs no new env var or Secret: `PROMETHEUS_URL` exists since NM-3. Order across repos (docs/060 §11): **doemefu/homelab#118 coroot-node-agent DaemonSet → this repo's #16 PR → doemefu/furchert-ch#63** (already merged; its egress section shows "no data" until rows exist). This PR does not depend on the agents at merge time.
+
+1. **Merge this PR.** Flux rolls out the new image; Flyway applies V4 on startup.
+2. `egress` runs hourly at :07 UTC for the last completed hour and backfills up to 48 h (12 hours per run). While no coroot-node-agent publishes connect series (the node gate `coroot_node_agent_nodes` is empty, or the ServiceMonitor is not scraping), every run succeeds with `lastErrorCode=upstream` and `consecutiveFailures: 0`; the WARN line `[egress] run completed with warning: code=upstream warning=CollectorWarning: no node exposes the coroot egress metrics` is expected. The freshness gauge is set on every run, so `NetmonCollectorStale` (3 h class) stays quiet.
+3. With agents running (raspi5 and mba1 since the spike), rows appear after the next :07 run and `lastErrorCode` becomes `null`. Hours from nodes without an agent simply have no rows.
+
+**What a row is (§3.3, §4.6).** One row per hour, node, `container_id`, `destination` and `actual_destination`, from `increase(...[1h])` evaluated at the hour's end, plus a row for every connect series that merely existed in the hour (a brand-new destination has a single sample, which `increase()` cannot see; its first-hour counters are therefore a lower bound or 0). External destinations whose name resolves to several IPs are reported by coroot by name only (`destination = api.example.com:443`, empty `actual_destination`, `destination_ip` null). `is_new` marks a (namespace/workload/container, destination, port) not seen in the previous 30 days, so the first 30 days after the rollout over-report new destinations.
+
+### Verification (§11 NM-2)
+
+```bash
+PSQL='kubectl -n apps exec postgresql-0 -c postgresql -- psql -U postgres -d data_service -c'
+$PSQL "select version, success from public.flyway_schema_history_data order by installed_rank"     # 1 to 4
+$PSQL "select collector, last_success_at, last_window_end, consecutive_failures, last_error_code from netmon.collector_state where collector = 'egress'"
+$PSQL "select workload, destination_host, destination_port, fqdn, sum(bytes_sent) sent, sum(connects) from netmon.egress_flow_snapshots where workload = 'litellm' and destination_scope = 'external' group by 1,2,3,4 order by sent desc limit 10"   # §11: litellm's external destinations with FQDNs
+$PSQL "select window_start, count(*) from netmon.egress_flow_snapshots group by 1 order by 1 desc limit 6"   # rows per hour, far below the 2 000 cap
+```
+
 ## NM-3 rollout (#15): LAN snapshots
 
 NM-3 adds the `lan` collector, the migration `V3__netmon_lan` (three tables, additive) and `PROMETHEUS_URL` (a plain value, no Secret). Order across repos (docs/060 §11): **doemefu/homelab#117 role rollout → this repo's #15 PR → doemefu/furchert-ch#62**. This PR does not depend on the role at merge time.
@@ -158,6 +178,8 @@ A token without `netmon:read` must get 403.
 | `/status`: `lan` with `lastErrorCode=upstream` and 0 failures | No node exposes the NM-3 metrics: the `netmon_node` role is not rolled out (doemefu/homelab#117) or node-exporter is not scraping its textfile directory. Check `max by (node) (homelab_netmon_last_success_timestamp_seconds)` in Prometheus |
 | `/status`: `lan` with `lastErrorCode=upstream` and 0 failures, `lastError` "… node window(s) finalised without the node's bucket …" | A node exposes `homelab_netmon_last_success_timestamp_seconds` but did not publish the bucket by `T+12m`: its script is failing while node-exporter keeps serving the last textfile (`NetmonNodeScriptStale` fires too). Check `systemctl status homelab-netmon.service` on the node named in the WARN line `[lan] window end=… not published by nodes=[…]` |
 | `/status`: `lan` with `lastErrorCode=upstream` and failures > 0 | Prometheus unreachable or answering 5xx (`PROMETHEUS_URL`); runs back off up to 30 min and catch up afterwards (48 h cap) |
+| `/status`: `egress` with `lastErrorCode=upstream` and 0 failures | No coroot-node-agent publishes `container_net_tcp_successful_connects_total` in the hour before the last window end: the DaemonSet's node gate is empty or the ServiceMonitor is not scraping (doemefu/homelab#118). Check `count by (node) (container_net_tcp_successful_connects_total)` in Prometheus |
+| `/status`: `egress` with `lastErrorCode=truncated` | An hour had more than `netmon.egress.max-rows-per-window` (2 000) flows, so the smallest by bytes sent were dropped (WARN `[egress] window end=… kept … of … rows`). Or the bytes-sent query returned its full `topk` of 500 series, so smaller flows show 0 bytes sent (WARN `… hit its topk bound`). Raise the property or look for a workload with a destination explosion |
 | `/status`: `lan` with `lastErrorCode=internal` | Prometheus rejected a query (HTTP 400/422 `bad_data`), a data-service bug. HTTP 422 `execution`/`timeout`/`canceled` is `upstream` (transient, with backoff) |
 | `/status`: `lastErrorCode=truncated` with 0 failures | A 5-minute slice or a firewall page hit the page limit; data was written, the window may be incomplete |
 | `/status`: `blocklists` with `upstream` | One list failed to download or parse; see `netmon.blocklist_snapshots.error`. The previous entries stay active |

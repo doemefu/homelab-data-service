@@ -58,6 +58,6 @@ netmon:
   # docs/060 §4.5: the reputation collector stays unavailable while the key is blank.
   abuseipdb:
     api-key: ${ABUSEIPDB_API_KEY:}
-  # docs/060 §4.6, §9: the cluster Prometheus that carries the NM-3 node-script metrics (no credentials).
+  # docs/060 §4.6, §9: the cluster Prometheus that carries the NM-3 node-script and NM-2 coroot metrics (no credentials).
   prometheus:
     url: ${PROMETHEUS_URL:http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090}

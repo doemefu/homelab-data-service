@@ -12,17 +12,17 @@ import java.util.List;
 import java.util.Map;
 
 /** A Prometheus answering fixed vectors per (query, evaluation time); anything else is an empty vector. */
-class FakePrometheus extends PrometheusClient {
+public class FakePrometheus extends PrometheusClient {
 
     private final Map<String, List<PrometheusSample>> answers = new HashMap<>();
-    final List<String> calls = new ArrayList<>();
-    RuntimeException failure;
+    public final List<String> calls = new ArrayList<>();
+    public RuntimeException failure;
 
-    FakePrometheus() {
+    public FakePrometheus() {
         super(null, new PrometheusProperties("http://prometheus.test:9090"), null);
     }
 
-    FakePrometheus on(String query, Instant time, PrometheusSample... samples) {
+    public FakePrometheus on(String query, Instant time, PrometheusSample... samples) {
         answers.put(key(query, time), List.of(samples));
         return this;
     }
@@ -36,7 +36,7 @@ class FakePrometheus extends PrometheusClient {
         return answers.getOrDefault(key(promql, time), List.of());
     }
 
-    static PrometheusSample sample(double value, String... labels) {
+    public static PrometheusSample sample(double value, String... labels) {
         Map<String, String> map = new LinkedHashMap<>();
         for (int i = 0; i < labels.length; i += 2) {
             map.put(labels[i], labels[i + 1]);
@@ -44,7 +44,7 @@ class FakePrometheus extends PrometheusClient {
         return new PrometheusSample(map, value);
     }
 
-    static String key(String query, Instant time) {
+    public static String key(String query, Instant time) {
         return time.getEpochSecond() + " " + query;
     }
 }
