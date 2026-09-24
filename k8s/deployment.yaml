@@ -66,6 +66,9 @@ spec:
                   name: data-service-secrets
                   key: abuseipdb-api-key
                   optional: true
+            # NM-3 (docs/060 §4.6, §9): source of the node-script LAN metrics; cluster-internal, no credentials.
+            - name: PROMETHEUS_URL
+              value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
             # docs/060 §9 baseline, except MaxMetaspaceSize: NM-0 alone measured ~56 MB of metaspace
             # after startup and first requests (87% of the 64m baseline), so the cap is 96m.
             - name: JAVA_TOOL_OPTIONS

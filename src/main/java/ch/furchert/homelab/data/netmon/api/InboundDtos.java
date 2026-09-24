@@ -47,10 +47,11 @@ public final class InboundDtos {
     public record FirewallEventPage(List<FirewallEventItem> items, String nextCursor) {
     }
 
-    /** {@code logins} (NM-4) and {@code lan} (NM-3) are {@code null} until those sub-projects ship. */
+    /** {@code logins} is {@code null} until NM-4 ships. */
     public record IpDetail(String ip, Instant firstSeen, Instant lastSeen, List<String> seenIn, String country,
                            Integer asn, String asnOrg, List<BlocklistHit> blocklists, AbuseIpDb abuseIpDb,
-                           IpInbound inbound, List<FirewallEventItem> firewallEvents, Object logins, Object lan) {
+                           IpInbound inbound, List<FirewallEventItem> firewallEvents, Object logins,
+                           LanDtos.IpLan lan) {
     }
 
     public record BlocklistHit(String list, String cidr, Instant fetchedAt) {
