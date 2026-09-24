@@ -207,10 +207,70 @@ class LanCollectorIntegrationTest extends AbstractIntegrationTest {
                 .on(LanQueries.BUCKET_ENDS, NEXT_PLUS_4, sample(seconds(NEXT), "node", "raspi5"),
                         sample(seconds(PREVIOUS_END), "node", "mba2"));
 
-        collector(prometheus, Instant.parse("2026-09-24T10:19:30Z"), 32).collect();
+        assertThat(runner.run(collector(prometheus, Instant.parse("2026-09-24T10:19:30Z"), 32))).isTrue();
 
         assertThat(mark()).isEqualTo(T);
         assertThat(jdbc.sql("SELECT count(*) FROM netmon.ufw_block_snapshots WHERE node = 'mba2'").query(Long.class).single()).isZero();
+        // The skipped node is visible in /status instead of disappearing silently.
+        CollectorState row = state.find(LanCollector.NAME).orElseThrow();
+        assertThat(row.lastErrorCode()).isEqualTo("upstream");
+        assertThat(row.lastError()).isEqualTo("CollectorWarning: 1" + LanCollector.UNPUBLISHED);
+        assertThat(row.consecutiveFailures()).isZero();
+    }
+
+    @Test
+    void catchUpThroughWindowsBeforeTheRolloutDoesNotWarn() {
+        // First run: 48 h of empty history, but the latest evaluation point has a node.
+        FakePrometheus prometheus = new FakePrometheus()
+                .on(LanQueries.EXPECTED_NODES, T_PLUS_4, sample(1, "node", "raspi5"));
+
+        assertThat(runner.run(collector(prometheus, Instant.parse("2026-09-24T10:04:30Z"), 4))).isTrue();
+
+        CollectorState row = state.find(LanCollector.NAME).orElseThrow();
+        assertThat(row.lastErrorCode()).isNull();
+        assertThat(row.lastWindowEnd()).isEqualTo(T.minusSeconds(48 * 3600).plusSeconds(4 * 900));
+    }
+
+    @Test
+    void aBucketSeriesOfThePreviousWindowNeverLeaksIntoTheNextOne() {
+        Instant earlier = PREVIOUS_END.minusSeconds(900);
+        state.updateWindowEnd(LanCollector.NAME, earlier);
+        Instant previousPlus4 = PREVIOUS_END.plusSeconds(240);
+        FakePrometheus prometheus = new FakePrometheus()
+                .on(LanQueries.EXPECTED_NODES, previousPlus4, sample(1, "node", "raspi5"))
+                .on(LanQueries.BUCKET_ENDS, previousPlus4, sample(seconds(PREVIOUS_END), "node", "raspi5"))
+                .on(LanQueries.ufwBlocks(PREVIOUS_END), previousPlus4,
+                        sample(6, "node", "raspi5", "src_ip", "203.0.113.9", "dport", "23", "proto", "TCP"))
+                // Window T: the guard moved on and no bucket series matches it.
+                .on(LanQueries.EXPECTED_NODES, T_PLUS_4, sample(1, "node", "raspi5"))
+                .on(LanQueries.BUCKET_ENDS, T_PLUS_4, sample(seconds(T), "node", "raspi5"));
+
+        collector(prometheus, Instant.parse("2026-09-24T10:04:30Z"), 32).collect();
+
+        assertThat(mark()).isEqualTo(T);
+        assertThat(jdbc.sql("""
+                        SELECT to_char(window_start AT TIME ZONE 'UTC', 'HH24:MI') || '|' || blocks
+                        FROM netmon.ufw_block_snapshots
+                        """).query(String.class).list())
+                .containsExactly("09:30|6");
+    }
+
+    @Test
+    void ipv4MappedSourcesAreNormalisedAndMerged() {
+        state.updateWindowEnd(LanCollector.NAME, PREVIOUS_END);
+        FakePrometheus prometheus = new FakePrometheus()
+                .on(LanQueries.EXPECTED_NODES, T_PLUS_4, sample(1, "node", "raspi5"))
+                .on(LanQueries.BUCKET_ENDS, T_PLUS_4, sample(seconds(T), "node", "raspi5"))
+                .on(LanQueries.ufwBlocks(T), T_PLUS_4,
+                        sample(2, "node", "raspi5", "src_ip", "::ffff:203.0.113.9", "dport", "23", "proto", "TCP"),
+                        sample(3, "node", "raspi5", "src_ip", "203.0.113.9", "dport", "23", "proto", "TCP"),
+                        sample(1, "node", "raspi5", "src_ip", "2001:DB8:0:0:0:0:0:1", "dport", "22", "proto", "TCP"));
+
+        collector(prometheus, Instant.parse("2026-09-24T10:04:30Z"), 32).collect();
+
+        assertThat(jdbc.sql("SELECT src_ip || '|' || blocks FROM netmon.ufw_block_snapshots ORDER BY src_ip")
+                .query(String.class).list())
+                .containsExactly("2001:db8::1|1", "203.0.113.9|5");
     }
 
     @Test
@@ -318,6 +378,8 @@ class LanCollectorIntegrationTest extends AbstractIntegrationTest {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).ignoreExpectOrder(true).build();
         String url = "http://prometheus.test:9090/api/v1/query";
+        expect(server, url, LanQueries.EXPECTED_NODES, T_PLUS_4, "{\"node\":\"raspi5\"}", "1758708005");
+        // Asked again after the loop, at the latest evaluation point (here the same window).
         expect(server, url, LanQueries.EXPECTED_NODES, T_PLUS_4, "{\"node\":\"raspi5\"}", "1758708005");
         expect(server, url, LanQueries.BUCKET_ENDS, T_PLUS_4, "{\"node\":\"raspi5\"}", Long.toString(T.getEpochSecond()));
         expect(server, url, LanQueries.CONNECTIONS, T,

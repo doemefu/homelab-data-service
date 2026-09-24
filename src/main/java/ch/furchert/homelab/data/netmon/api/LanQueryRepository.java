@@ -99,17 +99,19 @@ public class LanQueryRepository {
     }
 
     /**
-     * UFW blocks and unsuccessful SSH attempts of one IP. {@code src_ip} is text written by the node script
-     * (Python's canonical form), so the IP is compared in Postgres' canonical form ({@code host(inet)}).
+     * UFW blocks and unsuccessful SSH attempts of one IP. {@code src_ip} is text, normalised by the collector to
+     * the RFC 5952 form, so the IP is compared in Postgres' {@code host(inet)} form; the IPv4-mapped spelling is
+     * matched as well in case a row predates that normalisation.
      */
     public IpLan ipSummary(TimeWindow window, String ip) {
         return jdbc.sql("""
                         SELECT
                           (SELECT coalesce(sum(u.blocks), 0) FROM netmon.ufw_block_snapshots u
-                           WHERE u.src_ip = host(CAST(:ip AS inet))
+                           WHERE u.src_ip IN (host(CAST(:ip AS inet)), '::ffff:' || host(CAST(:ip AS inet)))
                              AND u.window_start < :to AND u.window_end > :from) AS ufw_blocks,
                           (SELECT coalesce(sum(a.attempts), 0) FROM netmon.ssh_auth_snapshots a
-                           WHERE a.src_ip = host(CAST(:ip AS inet)) AND a.outcome IN ('failed', 'invalid_user')
+                           WHERE a.src_ip IN (host(CAST(:ip AS inet)), '::ffff:' || host(CAST(:ip AS inet)))
+                             AND a.outcome IN ('failed', 'invalid_user')
                              AND a.window_start < :to AND a.window_end > :from) AS ssh_failed
                         """)
                 .param("ip", ip)

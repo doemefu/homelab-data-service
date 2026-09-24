@@ -86,6 +86,33 @@ class PrometheusClientTest {
     }
 
     @Test
+    void mapsPrometheusSideEvaluationErrorsToUpstream() {
+        for (String errorType : new String[]{"execution", "timeout", "canceled"}) {
+            PrometheusClient client = client();
+            server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.UNPROCESSABLE_CONTENT)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"status\":\"error\",\"errorType\":\"" + errorType + "\",\"error\":\"x\"}"));
+            assertThatThrownBy(() -> client.query("up", TIME))
+                    .isInstanceOfSatisfying(CollectorException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.UPSTREAM));
+        }
+        PrometheusClient client = client();
+        server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"status\":\"error\",\"errorType\":\"bad_data\",\"error\":\"parse error\"}"));
+        assertThatThrownBy(() -> client.query("up", TIME))
+                .isInstanceOfSatisfying(CollectorException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.INTERNAL));
+    }
+
+    @Test
+    void oversizedBodiesAreUpstream() {
+        PrometheusClient client = client();
+        server.expect(requestTo(URL)).andRespond(withSuccess("x".repeat(PrometheusClient.MAX_BODY_BYTES + 1),
+                MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> client.query("up", TIME))
+                .isInstanceOfSatisfying(CollectorException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.UPSTREAM));
+    }
+
+    @Test
     void mapsIoFailuresToUpstream() {
         PrometheusClient client = client();
         server.expect(requestTo(URL)).andRespond(withException(new IOException("connection refused")));

@@ -24,11 +24,16 @@ import java.util.Map;
  * fields {@code query} and {@code time} (unix seconds), 10 s timeouts from {@code netmonRestClient}. The
  * query travels in the body, so no label value ever appears in a URL. Errors map to the status API codes:
  * I/O, 5xx, malformed JSON and non-vector results → {@code upstream}; 429 → {@code rate_limited};
- * 401/403 → {@code credentials}; 400/422 ({@code bad_data}: a broken query is a data-service bug) →
- * {@code internal}. Neither the query nor the result is logged.
+ * 401/403 → {@code credentials}; 400/422 by the body's {@code errorType}: {@code bad_data} (a broken query, a
+ * data-service bug) → {@code internal}, {@code execution}/{@code timeout}/{@code canceled} (Prometheus-side,
+ * transient) → {@code upstream}, anything else → {@code internal}. Bodies above {@link #MAX_BODY_BYTES} are
+ * {@code upstream}. Neither the query nor the result is logged.
  */
 @Component
 public class PrometheusClient {
+
+    /** An instant vector of the NM-3 queries is a few hundred series; anything near this cap is not ours. */
+    static final int MAX_BODY_BYTES = 8 * 1024 * 1024;
 
     private final RestClient restClient;
     private final PrometheusProperties properties;
@@ -53,7 +58,8 @@ public class PrometheusClient {
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .accept(MediaType.APPLICATION_JSON)
                     .body(form)
-                    .exchange((request, res) -> new Response(res.getStatusCode().value(), res.getBody().readAllBytes()));
+                    .exchange((request, res) -> new Response(res.getStatusCode().value(),
+                            res.getBody().readNBytes(MAX_BODY_BYTES + 1)));
         } catch (ResourceAccessException e) {
             throw new CollectorException(ErrorCode.UPSTREAM, "Prometheus unreachable");
         }
@@ -64,7 +70,15 @@ public class PrometheusClient {
         if (status == 429) {
             throw new CollectorException(ErrorCode.RATE_LIMITED, "Prometheus rate limit (HTTP 429)");
         }
+        if (response.body().length > MAX_BODY_BYTES) {
+            throw new CollectorException(ErrorCode.UPSTREAM, "Prometheus response exceeds " + MAX_BODY_BYTES + " bytes");
+        }
         if (status == 400 || status == 422) {
+            String errorType = errorType(response.body());
+            if (TRANSIENT_ERRORS.contains(errorType)) {
+                throw new CollectorException(ErrorCode.UPSTREAM,
+                        "Prometheus could not evaluate the query (HTTP " + status + ", " + errorType + ")");
+            }
             throw new CollectorException(ErrorCode.INTERNAL, "Prometheus rejected the query (HTTP " + status + ")");
         }
         if (status < 200 || status >= 300) {
@@ -98,6 +112,17 @@ public class PrometheusClient {
             samples.add(new PrometheusSample(labels, parseValue(value.get(1).asString(""))));
         }
         return samples;
+    }
+
+    private static final java.util.Set<String> TRANSIENT_ERRORS = java.util.Set.of("execution", "timeout", "canceled");
+
+    /** The {@code errorType} of a Prometheus error body, or empty when the body is not the API's JSON. */
+    private String errorType(byte[] body) {
+        try {
+            return jsonMapper.readTree(body).path("errorType").asString("");
+        } catch (JacksonException e) {
+            return "";
+        }
     }
 
     /** Prometheus encodes sample values as strings, including {@code NaN}, {@code +Inf} and {@code -Inf}. */

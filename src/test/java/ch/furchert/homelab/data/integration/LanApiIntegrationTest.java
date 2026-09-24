@@ -147,6 +147,14 @@ class LanApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.seenIn", contains("lan")))
                 .andExpect(jsonPath("$.lan.ufwBlocks").value(12))
                 .andExpect(jsonPath("$.lan.sshFailed").value(5));
+
+        // A row stored in the IPv4-mapped spelling still counts for the plain IPv4 lookup.
+        jdbc.sql("""
+                INSERT INTO netmon.ufw_block_snapshots (window_start, window_end, node, src_ip, dport, proto, blocks, source)
+                VALUES ('2026-09-24T09:45:00Z', '2026-09-24T10:00:00Z', 'mba1', '::ffff:203.0.113.9', 23, 'TCP', 1, 'prometheus-textfile')
+                """).update();
+        call("/api/netmon/ips/203.0.113.9", "from", FROM, "to", TO)
+                .andExpect(jsonPath("$.lan.ufwBlocks").value(13));
     }
 
     @Test

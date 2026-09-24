@@ -58,7 +58,7 @@ Collector freshness for the UI's honest-fallback banner. One element per registe
 ```
 
 - `enabled` reflects the kill switch `netmon.collectors.<name>.enabled` (default `true`). It is also `false` for a collector that lacks required configuration: `reputation` while `ABUSEIPDB_API_KEY` is unset.
-- `lastErrorCode` is `null`, `credentials`, `rate_limited`, `upstream`, `truncated` or `internal`; never a message. `truncated` is a warning on a successful run (a window exceeded the Cloudflare page limit), so it can appear with `consecutiveFailures: 0`. The same holds for `lan` with `upstream` and `consecutiveFailures: 0`: the run worked, but no node exposes the NM-3 metrics yet (the `netmon_node` role is not rolled out, or node-exporter scraping is broken). A real Prometheus outage is a failure (`consecutiveFailures` > 0).
+- `lastErrorCode` is `null`, `credentials`, `rate_limited`, `upstream`, `truncated` or `internal`; never a message. `truncated` is a warning on a successful run (a window exceeded the Cloudflare page limit), so it can appear with `consecutiveFailures: 0`. The same holds for `lan` with `upstream` and `consecutiveFailures: 0`: the run worked, but either no node exposes the NM-3 metrics at the latest evaluation point (the `netmon_node` role is not rolled out, or node-exporter scraping is broken), or an expected node never published a window the run finalised (its script is failing). A real Prometheus outage is a failure (`consecutiveFailures` > 0).
 - `lastWindowEnd` is the collector's high-water mark: for `cloudflare-requests` the end of the newest contiguous final hour, for `cloudflare-firewall` the `until` of the last complete run, for `lan` the end of the newest contiguous final 15-minute window (see DEPLOYMENT "NM-3 rollout" for when a window is final).
 - `stale` is `true` when the last success is older than 3 × the collector's cadence. Before the first success, the service start time is the reference, so a new deployment is not stale before a collector could have run. A disabled collector is never stale.
 
@@ -125,7 +125,7 @@ Peak concurrent TCP connections to the watched node ports (1883, 22, 8123, 6443,
 ```
 
 - `peakConnections` = the highest 15-minute peak in the window; `windows` = number of 15-minute snapshots with this key; `firstSeen` = start of the oldest, `lastSeen` = end of the newest.
-- `srcIp` is a LAN IP, `10.42.0.0/16` (any pod) or `other` (overflow beyond the per-node series cap).
+- `srcIp` is a LAN IP, `10.42.0.0/16` (any pod) or `other` (overflow beyond the per-node series cap). IP literals in all three LAN endpoints use the RFC 5952 form (`2001:db8::1`; IPv4-mapped addresses as plain IPv4).
 
 ### `GET /api/netmon/lan/ufw-blocks?from&to&node&limit` (§7.2, NM-3)
 

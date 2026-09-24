@@ -101,6 +101,19 @@ $PSQL "select node, dport, src_ip, max(peak_connections) from netmon.lan_connect
 $PSQL "select window_start, node, sum(blocks) from netmon.ufw_block_snapshots group by 1,2 order by 1 desc limit 8"   # a test block appears within 30 min
 ```
 
+**Post-rollout manual check (bucket guard and staleness).** The tests use canned Prometheus answers, so they cannot prove that the live guard and staleness handling stop a bucket from being counted twice. Once, after the role rollout, compare two adjacent windows of one node against that node's raw journal. The counts must match per window. The value for window `S` must not repeat in window `S+900` unless the journal shows the same count there.
+
+```bash
+S=$(( $(date -u +%s) / 900 * 900 - 3600 ))        # a completed bucket start, 1 h ago
+for W in $S $((S + 900)); do
+  echo "window $(date -u -r $W +%H:%M)"
+  ssh raspi5 "sudo journalctl -k --since @$W --until @$((W + 900)) --no-pager -o cat | grep -cF '[UFW BLOCK]'"
+  $PSQL "select coalesce(sum(blocks), 0) from netmon.ufw_block_snapshots where node = 'raspi5' and window_start = to_timestamp($W)"
+done
+```
+
+The journal count includes the overflow row (`src_ip=other`), which the SQL sum covers as well. A mismatch in only one window points at the guard. If every window is 0 in the database, the node has not published: check `/status` for the "node window(s) finalised without the node's bucket" warning.
+
 ## Verification (§11 NM-0)
 
 ```bash
@@ -143,7 +156,8 @@ A token without `netmon:read` must get 403.
 | `/status`: `cloudflare-*` with `lastErrorCode=upstream` | Cloudflare 5xx/unreachable, or GraphQL `errors[]` — the WARN log line `[cloudflare] GraphQL errors: … first=…` names the problem (typically a field not available on the plan) |
 | `/status`: `lastErrorCode=rate_limited` | Cloudflare 429; runs back off exponentially up to 30 min |
 | `/status`: `lan` with `lastErrorCode=upstream` and 0 failures | No node exposes the NM-3 metrics: the `netmon_node` role is not rolled out (doemefu/homelab#117) or node-exporter is not scraping its textfile directory. Check `max by (node) (homelab_netmon_last_success_timestamp_seconds)` in Prometheus |
+| `/status`: `lan` with `lastErrorCode=upstream` and 0 failures, `lastError` "… node window(s) finalised without the node's bucket …" | A node exposes `homelab_netmon_last_success_timestamp_seconds` but did not publish the bucket by `T+12m`: its script is failing while node-exporter keeps serving the last textfile (`NetmonNodeScriptStale` fires too). Check `systemctl status homelab-netmon.service` on the node named in the WARN line `[lan] window end=… not published by nodes=[…]` |
 | `/status`: `lan` with `lastErrorCode=upstream` and failures > 0 | Prometheus unreachable or answering 5xx (`PROMETHEUS_URL`); runs back off up to 30 min and catch up afterwards (48 h cap) |
-| `/status`: `lan` with `lastErrorCode=internal` | Prometheus rejected a query (HTTP 400/422 `bad_data`), a data-service bug |
+| `/status`: `lan` with `lastErrorCode=internal` | Prometheus rejected a query (HTTP 400/422 `bad_data`), a data-service bug. HTTP 422 `execution`/`timeout`/`canceled` is `upstream` (transient, with backoff) |
 | `/status`: `lastErrorCode=truncated` with 0 failures | A 5-minute slice or a firewall page hit the page limit; data was written, the window may be incomplete |
 | `/status`: `blocklists` with `upstream` | One list failed to download or parse; see `netmon.blocklist_snapshots.error`. The previous entries stay active |

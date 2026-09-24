@@ -25,11 +25,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.BinaryOperator;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 
@@ -47,8 +49,11 @@ import java.util.regex.Pattern;
  * visible then; a re-evaluation at the same {@code T+4m} could never change the answer). After that the window
  * is final: the mark moves past it and a node that never published gets no bucket rows for it.
  *
- * <p>With no node exposing the metrics (the node role is not rolled out yet) a run still succeeds, but reports
- * {@code upstream} as a warning in {@code /status}. Logs carry node names and counts, never label values.
+ * <p>Two degraded states are successful runs that report {@code upstream} as a warning in {@code /status}: no
+ * node exposes the metrics at the latest evaluation point (the node role is not rolled out yet), or an expected
+ * node never published a window this run finalised (its script died while node-exporter keeps serving the last
+ * textfile). IP-literal {@code src_ip} values are stored in RFC 5952 form, so they match Postgres'
+ * {@code host(inet)}. Logs carry node names and counts, never label values.
  */
 @Component
 public class LanCollector implements NetmonCollector {
@@ -59,6 +64,7 @@ public class LanCollector implements NetmonCollector {
     static final Duration RETRY_EVALUATION = Duration.ofMinutes(12);
     static final Duration CATCH_UP = Duration.ofHours(48);
     static final String NO_NODES = "no node exposes the homelab_netmon metrics";
+    static final String UNPUBLISHED = " node window(s) finalised without the node's bucket (script not publishing)";
 
     static final Set<String> PROTOS = Set.of("TCP", "UDP", "ICMP", "OTHER");
     static final Set<String> OUTCOMES = Set.of("accepted", "failed", "invalid_user");
@@ -121,7 +127,7 @@ public class LanCollector implements NetmonCollector {
         }
 
         int processed = 0;
-        Boolean newestHadNodes = null;
+        int unpublished = 0;
         for (Instant end = mark.plus(WINDOW); !end.isAfter(latestEnd); end = end.plus(WINDOW)) {
             if (processed == properties.maxWindowsPerRun()) {
                 log.info("[{}] catch-up throttled at {} windows; continuing next run", NAME, processed);
@@ -129,14 +135,21 @@ public class LanCollector implements NetmonCollector {
             }
             processed++;
             WindowResult result = collectWindow(end, now);
-            newestHadNodes = result.expectedNodes() > 0;
+            unpublished += result.unpublishedNodes();
             if (!result.isFinal()) {
                 break;
             }
             state.updateWindowEnd(NAME, end);
         }
-        if (Boolean.FALSE.equals(newestHadNodes)) {
+        if (processed == 0) {
+            return;
+        }
+        // Judged at the latest evaluation point, so an old catch-up window from before the rollout cannot warn.
+        if (nodes(prometheus.query(LanQueries.EXPECTED_NODES, latestEnd.plus(FIRST_EVALUATION))).isEmpty()) {
             throw new CollectorWarning(ErrorCode.UPSTREAM, NO_NODES);
+        }
+        if (unpublished > 0) {
+            throw new CollectorWarning(ErrorCode.UPSTREAM, unpublished + UNPUBLISHED);
         }
     }
 
@@ -155,12 +168,12 @@ public class LanCollector implements NetmonCollector {
         Set<String> pending = new TreeSet<>(expected);
         pending.removeAll(published);
         if (pending.isEmpty()) {
-            return new WindowResult(true, expected.size());
+            return new WindowResult(true, 0);
         }
         Instant retry = end.plus(RETRY_EVALUATION);
         if (now.isBefore(retry)) {
             log.info("[{}] window end={} waiting for nodes={}", NAME, end, pending);
-            return new WindowResult(false, expected.size());
+            return new WindowResult(false, 0);
         }
         Set<String> late = publishedNodes(end, retry);
         late.retainAll(pending);
@@ -169,7 +182,7 @@ public class LanCollector implements NetmonCollector {
         if (!pending.isEmpty()) {
             log.warn("[{}] window end={} not published by nodes={}; skipped for them", NAME, end, pending);
         }
-        return new WindowResult(true, expected.size());
+        return new WindowResult(true, pending.size());
     }
 
     private Set<String> publishedNodes(Instant end, Instant evaluation) {
@@ -195,8 +208,12 @@ public class LanCollector implements NetmonCollector {
         Map<String, List<UfwBlock>> ufw = Map.of();
         Map<String, List<SshAuth>> ssh = Map.of();
         if (!published.isEmpty()) {
-            ufw = parse(prometheus.query(LanQueries.ufwBlocks(end), evaluation), LanCollector::ufwBlock);
-            ssh = parse(prometheus.query(LanQueries.sshAuth(end), evaluation), LanCollector::sshAuth);
+            ufw = parse(prometheus.query(LanQueries.ufwBlocks(end), evaluation), LanCollector::ufwBlock,
+                    u -> List.of(u.srcIp(), u.dport(), u.proto()),
+                    (a, b) -> new UfwBlock(a.srcIp(), a.dport(), a.proto(), saturatedSum(a.blocks(), b.blocks())));
+            ssh = parse(prometheus.query(LanQueries.sshAuth(end), evaluation), LanCollector::sshAuth,
+                    a -> List.of(a.srcIp(), a.outcome()),
+                    (a, b) -> new SshAuth(a.srcIp(), a.outcome(), saturatedSum(a.attempts(), b.attempts())));
         }
         List<Sighting> sightings = new ArrayList<>();
         for (String node : nodes) {
@@ -231,12 +248,18 @@ public class LanCollector implements NetmonCollector {
     }
 
     private Map<String, List<Connection>> connections(List<PrometheusSample> samples) {
-        return parse(samples, LanCollector::connection);
+        return parse(samples, LanCollector::connection, c -> List.of(c.srcIp(), c.dport(), c.state()),
+                (a, b) -> a.peakConnections() >= b.peakConnections() ? a : b);
     }
 
-    /** Groups valid rows by node; series with unexpected labels or values are dropped and only counted. */
-    private static <T> Map<String, List<T>> parse(List<PrometheusSample> samples, Function<PrometheusSample, T> mapper) {
-        Map<String, List<T>> byNode = new TreeMap<>();
+    /**
+     * Groups valid rows by node; series with unexpected labels or values are dropped and only counted. Rows whose
+     * natural key collides after {@code src_ip} normalisation (e.g. {@code ::ffff:192.0.2.1} and {@code 192.0.2.1})
+     * are merged, so the UNIQUE constraint never aborts a window.
+     */
+    private static <T> Map<String, List<T>> parse(List<PrometheusSample> samples, Function<PrometheusSample, T> mapper,
+                                                  Function<T, Object> key, BinaryOperator<T> merge) {
+        Map<String, Map<Object, T>> byNode = new TreeMap<>();
         int dropped = 0;
         for (PrometheusSample sample : samples) {
             String node = sample.label("node");
@@ -245,12 +268,19 @@ public class LanCollector implements NetmonCollector {
                 dropped++;
                 continue;
             }
-            byNode.computeIfAbsent(node, key -> new ArrayList<>()).add(row);
+            byNode.computeIfAbsent(node, n -> new LinkedHashMap<>()).merge(key.apply(row), row, merge);
         }
         if (dropped > 0) {
             log.warn("[{}] dropped {} series with unexpected labels or values", NAME, dropped);
         }
-        return byNode;
+        Map<String, List<T>> rows = new TreeMap<>();
+        byNode.forEach((node, perKey) -> rows.put(node, List.copyOf(perKey.values())));
+        return rows;
+    }
+
+    private static int saturatedSum(int a, int b) {
+        long sum = (long) a + b;
+        return sum > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) sum;
     }
 
     static Connection connection(PrometheusSample s) {
@@ -285,9 +315,13 @@ public class LanCollector implements NetmonCollector {
         return new SshAuth(srcIp, outcome, attempts);
     }
 
+    /** An IP literal in RFC 5952 form; the {@code 10.42.0.0/16} and {@code other} buckets verbatim. */
     private static String srcIp(PrometheusSample s) {
         String srcIp = s.label("src_ip");
-        return srcIp != null && SRC_IP.matcher(srcIp).matches() ? srcIp : null;
+        if (srcIp == null || !SRC_IP.matcher(srcIp).matches()) {
+            return null;
+        }
+        return IpAddresses.compressed(srcIp).orElse(srcIp);
     }
 
     private static Integer port(String raw, int min) {
@@ -315,6 +349,7 @@ public class LanCollector implements NetmonCollector {
         return Instant.ofEpochSecond(seconds - Math.floorMod(seconds, WINDOW.toSeconds()));
     }
 
-    private record WindowResult(boolean isFinal, int expectedNodes) {
+    /** {@code unpublishedNodes}: expected nodes finalised without their bucket (0 unless the window is final). */
+    private record WindowResult(boolean isFinal, int unpublishedNodes) {
     }
 }
