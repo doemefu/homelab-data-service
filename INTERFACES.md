@@ -49,7 +49,7 @@ RFC 9457 `application/problem+json` with `type` (`about:blank`), `title`, `statu
 
 ### `GET /api/netmon/status` (§7.2)
 
-Collector freshness for the UI's honest-fallback banner. One element per registered collector, sorted by name: `blocklists`, `cloudflare-firewall`, `cloudflare-requests`, `lan`, `reputation`, `retention`.
+Collector freshness for the UI's honest-fallback banner. One element per registered collector, sorted by name: `blocklists`, `cloudflare-firewall`, `cloudflare-requests`, `egress`, `lan`, `reputation`, `retention`.
 
 ```json
 { "collectors": [ { "name": "cloudflare-requests", "enabled": true, "lastSuccessAt": "2026-09-23T10:30:02Z",
@@ -58,8 +58,8 @@ Collector freshness for the UI's honest-fallback banner. One element per registe
 ```
 
 - `enabled` reflects the kill switch `netmon.collectors.<name>.enabled` (default `true`). It is also `false` for a collector that lacks required configuration: `reputation` while `ABUSEIPDB_API_KEY` is unset.
-- `lastErrorCode` is `null`, `credentials`, `rate_limited`, `upstream`, `truncated` or `internal`; never a message. `truncated` is a warning on a successful run (a window exceeded the Cloudflare page limit), so it can appear with `consecutiveFailures: 0`. The same holds for `lan` with `upstream` and `consecutiveFailures: 0`: the run worked, but either no node exposes the NM-3 metrics at the latest evaluation point (the `netmon_node` role is not rolled out, or node-exporter scraping is broken), or an expected node never published a window the run finalised (its script is failing). A real Prometheus outage is a failure (`consecutiveFailures` > 0).
-- `lastWindowEnd` is the collector's high-water mark: for `cloudflare-requests` the end of the newest contiguous final hour, for `cloudflare-firewall` the `until` of the last complete run, for `lan` the end of the newest contiguous final 15-minute window (see DEPLOYMENT "NM-3 rollout" for when a window is final).
+- `lastErrorCode` is `null`, `credentials`, `rate_limited`, `upstream`, `truncated` or `internal`; never a message. `truncated` is a warning on a successful run (a window exceeded the Cloudflare page limit), so it can appear with `consecutiveFailures: 0`. The same holds for `lan` with `upstream` and `consecutiveFailures: 0`: the run worked, but either no node exposes the NM-3 metrics at the latest evaluation point (the `netmon_node` role is not rolled out, or node-exporter scraping is broken), or an expected node never published a window the run finalised (its script is failing). `egress` reports `upstream` with `consecutiveFailures: 0` while no coroot-node-agent publishes connect series at the latest evaluation point (the DaemonSet is gated off, or not scraped), and `truncated` when a window hit `netmon.egress.max-rows-per-window`. A real Prometheus outage is a failure (`consecutiveFailures` > 0).
+- `lastWindowEnd` is the collector's high-water mark: for `cloudflare-requests` the end of the newest contiguous final hour, for `cloudflare-firewall` the `until` of the last complete run, for `lan` the end of the newest contiguous final 15-minute window (see DEPLOYMENT "NM-3 rollout" for when a window is final), for `egress` the end of the newest collected hour.
 - `stale` is `true` when the last success is older than 3 × the collector's cadence. Before the first success, the service start time is the reference, so a new deployment is not stale before a collector could have run. A disabled collector is never stale.
 
 ### `GET /api/netmon/inbound/summary?from&to&host&limit` (§7.2)
@@ -151,7 +151,26 @@ sshd authentication results per node and source. Default window 24 h; ordered by
 - The outcomes are disjoint: `failed` = failed authentication for an existing user (a lower bound, §5.4), `invalidUser` = attempts for a non-existent user.
 - Tunnelled SSH (`ssh.furchert.ch`) shows the cloudflared pod (`10.42.0.0/16`) or node address, not the client (§10).
 
-Further endpoints (`/egress/top`, `/logins/*`) arrive with NM-2 and NM-4.
+### `GET /api/netmon/egress/top?from&to&scope&namespace&workload&limit` (§7.2, NM-2)
+
+Top outbound TCP destinations per workload, aggregated from the hourly `egress_flow_snapshots` rows that overlap the window. Default window 24 h. `scope` is `external` (default) or `all` (adds `pod`, `service`, `lan` and `loopback` destinations); anything else is 400 `invalid_parameter`. `namespace` and `workload` narrow by exact match. `limit` is a top-N limit (default 10, max 50).
+
+```json
+{ "items": [ {"namespace": "apps", "workload": "litellm", "container": "litellm", "node": "mba1",
+              "destinationIp": "34.117.59.81", "destinationPort": 443, "fqdn": "api.example.com", "scope": "external",
+              "bytesSent": 301, "bytesReceived": 3001, "connects": 4, "failedConnects": 1,
+              "firstSeenInWindow": "2026-09-24T08:00:00Z", "isNew": true} ] }
+```
+
+- One item per `(namespace, workload, container, destination, destinationPort)`; items are ordered by `bytesSent + bytesReceived` descending. A Deployment rollout does not split an item: `workload` is the pod name without its ReplicaSet/DaemonSet suffix (`litellm-5d8f7c9b6-x2k9p` → `litellm`); StatefulSet pods keep their name; CronJob pods carry the CronJob name.
+- Host processes (systemd units such as k3s) have `namespace` and `workload` `null`, and `container` is the unit name (`k3s.service`).
+- `destinationIp` is the post-NAT IP literal (RFC 5952). **Name-only destinations:** coroot reports an external destination whose name resolves to several external IPs (typical for SaaS APIs and CDNs) by name only, without an IP. For such an item `destinationIp` carries that name and `fqdn` the same name. Consumers must not assume `destinationIp` is an IP literal.
+- `fqdn` is otherwise the name coroot saw in DNS answers for the IP (`ip_to_fqdn`, newest row that has one), or `null`.
+- `node` is the most frequent node of the aggregated rows. `firstSeenInWindow` is the start of the earliest hour inside the window with this item.
+- `isNew` is `true` if any aggregated hour was the first in 30 days in which this workload reached this destination and port. The identity is namespace + workload + container, so rollouts do not re-report known destinations. The first hours after the collector starts report everything as new.
+- Counters are `increase()` over each hour: an hour in which a destination's counter series first appears is a lower bound, and a destination seen only by the presence query has zero counters in that hour. `failedConnects` of a Service with several backends forms its own item with the Service IP (`scope` `service`, only with `scope=all`).
+
+Further endpoints (`/logins/*`) arrive with NM-4.
 
 ## 2. Exposed: actuator
 
@@ -168,7 +187,7 @@ Further endpoints (`/egress/top`, `/logins/*`) arrive with NM-2 and NM-4.
 |---|---|---|---|
 | `netmon_collector_last_success_timestamp_seconds` | gauge | `collector` | Unix time of the collector's last successful run; **NaN until the first success** (§4.1). Registered at startup only for collectors that are enabled and able to succeed. No series is exported for a collector whose kill switch is off, for `reputation` without `ABUSEIPDB_API_KEY`, or for `cloudflare-requests`/`cloudflare-firewall` started without `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID`. Those two still run and report `credentials` in `/status`. |
 
-The `NetmonCollectorStale` rule is owned by the infra repo (doemefu/homelab#116, PR #131). It treats a NaN sample as "never succeeded" once the pod (`kube_pod_start_time`) is older than the collector's threshold. The thresholds are 26 h for `blocklists`/`retention`, 90 min for `lan`/`reputation`, and 15 min for the 5-minute collectors `cloudflare-requests`/`cloudflare-firewall`. Because unconfigured collectors export no series, the rule never fires for a collector that is off on purpose.
+The `NetmonCollectorStale` rule is owned by the infra repo (doemefu/homelab#116, PR #131). It treats a NaN sample as "never succeeded" once the pod (`kube_pod_start_time`) is older than the collector's threshold. The thresholds are 26 h for `blocklists`/`retention`, 3 h for `egress`, 90 min for `lan`/`reputation`, and 15 min for the 5-minute collectors `cloudflare-requests`/`cloudflare-firewall`. Because unconfigured collectors export no series, the rule never fires for a collector that is off on purpose.
 
 ## 3. Consumed
 
@@ -181,9 +200,9 @@ The `NetmonCollectorStale` rule is owned by the infra repo (doemefu/homelab#116,
 | FireHOL level1 | `https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset` (`raw.githubusercontent.com:443`) | `blocklists`, daily 05:00 UTC, `If-None-Match` with the stored ETag. Private/bogon ranges in the list are dropped. |
 | AbuseIPDB | `https://api.abuseipdb.com/api/v2/check` (`api.abuseipdb.com:443`) | `reputation`, every 30 min, **only when `ABUSEIPDB_API_KEY` is set** (not yet). ≤ 10 checks per run, ≤ 200 per UTC day; only public, non-blocklisted IPs that crossed a §4.5 threshold. |
 
-| Prometheus | `http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090` (`PROMETHEUS_URL`, cluster-internal, no auth) | `lan` (NM-3), every 15 min at :04/:19/:34/:49 UTC: `POST /api/v1/query` (form fields `query`, `time`), 10 s timeouts. Reads the node-script metrics `homelab_lan_connections`, `homelab_ufw_blocks_bucket`, `homelab_sshd_auth_bucket`, `homelab_netmon_bucket_end_timestamp_seconds` and `homelab_netmon_last_success_timestamp_seconds` (§5.2, produced by the `netmon_node` role from doemefu/homelab#117). Five instant queries per window (§4.6), plus up to three for a retry. |
+| Prometheus | `http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090` (`PROMETHEUS_URL`, cluster-internal, no auth) | `lan` (NM-3), every 15 min at :04/:19/:34/:49 UTC: `POST /api/v1/query` (form fields `query`, `time`), 10 s timeouts. Reads the node-script metrics `homelab_lan_connections`, `homelab_ufw_blocks_bucket`, `homelab_sshd_auth_bucket`, `homelab_netmon_bucket_end_timestamp_seconds` and `homelab_netmon_last_success_timestamp_seconds` (§5.2, produced by the `netmon_node` role from doemefu/homelab#117). Five instant queries per window (§4.6), plus up to three for a retry. `egress` (NM-2), hourly at :07 UTC, same API: six instant queries per completed hour at `time` = the hour's end (§4.6: `increase(...[1h])` of `container_net_tcp_bytes_sent_total` (top 500), `..._bytes_received_total`, `..._successful_connects_total`, `..._failed_connects_total`, `last_over_time(ip_to_fqdn[1h])` and the series-presence query `group by (…) (last_over_time(container_net_tcp_successful_connects_total[1h]))`), plus one agent-presence query per run. The metrics come from the coroot-node-agent DaemonSet (doemefu/homelab#118, §6); without running agents the collector succeeds with an `upstream` warning. |
 
-These four are data-service's only outbound destinations outside the cluster (§10); blocklists are fetched only by data-service. NM-2 and NM-4 add more Prometheus queries and auth-service's login-event endpoint.
+These four are data-service's only outbound destinations outside the cluster (§10); blocklists are fetched only by data-service. NM-4 adds auth-service's login-event endpoint.
 
 ## 4. Database ownership (§3)
 
@@ -199,6 +218,7 @@ These four are data-service's only outbound destinations outside the cluster (§
 | `netmon.lan_connection_snapshots` | data-service | V3. Peak TCP connections per 15-minute window, node, port, source and state; replaced per `(window_start, node)`. Retention 30 d. |
 | `netmon.ufw_block_snapshots` | data-service | V3. UFW blocks per 15-minute bucket, node, source, port and protocol (a lower bound); replaced per `(window_start, node)`. Retention 90 d. |
 | `netmon.ssh_auth_snapshots` | data-service | V3. sshd outcomes per 15-minute bucket, node and source; replaced per `(window_start, node)`. Retention 90 d. |
+| `netmon.egress_flow_snapshots` | data-service | V4. Outbound TCP flows per hour, node, `container_id`, destination and post-NAT destination: bytes, connects, failed connects, FQDN, scope, `is_new`; replaced per `window_start`, at most 2 000 rows per hour. `destination_ip` is null for name-only destinations; `destination_host` (generated) is the IP or the name. Retention 30 d. |
 | `public.flyway_schema_history_data` | data-service | Flyway history |
 
 No other service reads or writes this database.
@@ -217,7 +237,7 @@ No other service reads or writes this database.
 | `CLOUDFLARE_API_TOKEN` | empty | Analytics:Read token for zone furchert.ch. Empty = the Cloudflare collectors fail with `credentials` |
 | `CLOUDFLARE_ZONE_ID` | empty | Zone tag. Empty = as above |
 | `ABUSEIPDB_API_KEY` | empty | Empty = `reputation` disabled |
-| `PROMETHEUS_URL` | `http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090` | Prometheus base URL for `lan` |
+| `PROMETHEUS_URL` | `http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090` | Prometheus base URL for `lan` and `egress` |
 
 | Property | Default | Purpose |
 |---|---|---|
@@ -235,6 +255,10 @@ No other service reads or writes this database.
 | `netmon.retention.lan-connection-snapshots-days` | `30` | Retention |
 | `netmon.retention.ufw-block-snapshots-days` / `ssh-auth-snapshots-days` | `90` / `90` | Retention |
 | `netmon.lan.max-windows-per-run` | `32` | Catch-up throttle for `lan` (the 48 h cap is 192 windows) |
+| `netmon.retention.egress-flow-snapshots-days` | `30` | Retention |
+| `netmon.egress.max-windows-per-run` | `12` | Catch-up throttle for `egress` (the 48 h cap is 48 windows) |
+| `netmon.egress.max-rows-per-window` | `2000` | Row cap per hour, kept by bytes sent then connects; exceeding it reports `truncated` |
+| `netmon.egress.pod-cidr` / `service-cidr` / `lan-cidr` | `10.42.0.0/16` / `10.43.0.0/16` / `192.168.1.0/24` | Destination scope `pod` / `service` / `lan`; loopback is `loopback`, everything else `external` |
 | `netmon.scheduling.enabled` | `true` | Turns every `@Scheduled` trigger off (the test suite sets `false`) |
 
 Kubernetes Secret `data-service-secrets` (ns `apps`, created by the `homelab` repo's playbook 59): keys `db-username`, `db-password`; NM-1 reads `cloudflare-api-token` → `CLOUDFLARE_API_TOKEN`, `cloudflare-zone-id` → `CLOUDFLARE_ZONE_ID` (both added by doemefu/homelab#116) and `abuseipdb-api-key` → `ABUSEIPDB_API_KEY` (only once the owner approves a key). All three `secretKeyRef`s are `optional: true`. NM-4 adds `auth-client-secret` (§9).

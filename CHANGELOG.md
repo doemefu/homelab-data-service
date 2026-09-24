@@ -5,6 +5,10 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Added
+- NM-2 (#16): Flyway `V4__netmon_egress` with `egress_flow_snapshots` (docs/060 §3.3), including a generated `destination_host` and a nullable `destination_ip` for destinations coroot reports by name only.
+- Collector `egress`: hourly at :07 UTC snapshots the coroot-node-agent TCP counters from Prometheus per completed hour (the six §4.6 queries incl. the series-presence query, `ip_to_fqdn` join, failed connects joined on `destination` when unambiguous), replaced per `window_start`, capped at 2 000 rows (`truncated` warning), `is_new` against the previous 30 days on a rollout-stable workload identity, 48 h catch-up. Without running agents it succeeds with `lastErrorCode=upstream`.
+- `GET /api/netmon/egress/top` (`scope=external|all`, `namespace`, `workload`, top-N `limit`), matching furchert-ch's `EgressFlow` shape.
+- Retention for `egress_flow_snapshots` (30 d); public external destination IPs enter `ip_enrichment` with `seen_in` `egress`.
 - NM-3 (#15): Flyway `V3__netmon_lan` with `lan_connection_snapshots`, `ufw_block_snapshots` and `ssh_auth_snapshots` (docs/060 §3.3).
 - Collector `lan`: every 15 min (:04/:19/:34/:49 UTC) snapshots the node-script metrics from Prometheus (`PROMETHEUS_URL`) per completed 15-minute window, replaced per `(window_start, node)`; bucket gauges only through instant selectors guarded by the bucket end; one retry at T+12m for a node that had not published yet; 48 h catch-up. Without any node exposing the metrics it succeeds with `lastErrorCode=upstream`.
 - `GET /api/netmon/lan/connections`, `/lan/ufw-blocks` (`lowerBound: true`) and `/lan/ssh-auth`; `/ips/{ip}` now returns `lan: {ufwBlocks, sshFailed}`.
