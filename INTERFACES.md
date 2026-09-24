@@ -49,7 +49,7 @@ RFC 9457 `application/problem+json` with `type` (`about:blank`), `title`, `statu
 
 ### `GET /api/netmon/status` (§7.2)
 
-Collector freshness for the UI's honest-fallback banner. One element per registered collector, sorted by name: `blocklists`, `cloudflare-firewall`, `cloudflare-requests`, `egress`, `lan`, `reputation`, `retention`.
+Collector freshness for the UI's honest-fallback banner. One element per registered collector, sorted by name: `blocklists`, `cloudflare-firewall`, `cloudflare-requests`, `egress`, `lan`, `login-events`, `reputation`, `retention`.
 
 ```json
 { "collectors": [ { "name": "cloudflare-requests", "enabled": true, "lastSuccessAt": "2026-09-23T10:30:02Z",
