@@ -14,6 +14,13 @@ The analytical data plane of the homelab (ADR 0002, `../docs/adr/0002-network-te
 **Package:** `ch.furchert.homelab.data`
 **Database:** PostgreSQL `data_service`, schema `netmon`, Flyway history `public.flyway_schema_history_data`
 
+## Architecture Context
+
+- **auth-service:** issues the tokens this service validates (JWKS + issuer); the login-event collector pulls `/api/v1/login-events` with client `data-service` (scope `login-events:read`).
+- **furchert-ch:** the only API consumer (`/dashboard/network`, client `furchert-ch`, scope `netmon:read`).
+- **infrastructure:** deploys it (`cluster/apps/data-service/`; Secret written by playbook 59). Spec `../docs/060-network-monitoring.md`, ADR `../docs/adr/0002-network-telemetry-ownership.md`.
+- **Sensor history (later):** follows `../docs/adr/0001-schedules-ownership-and-data-plane.md`.
+
 ## The contract
 
 **`docs/060-network-monitoring.md` in the `homelab` repo is the single source of truth** (locally `../infrastructure/docs/060-network-monitoring.md`; parent forwarder `../docs/060-network-monitoring.md`). Schema, collectors, API shapes, auth, env vars and Secret keys are implemented from it. A deviation is a spec change first, then code.
