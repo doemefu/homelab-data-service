@@ -4,6 +4,9 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Security
+- TEMPORARY: the runtime image removes the emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 entries from the JRE cacerts and the build fails if their fingerprints are still present (#38, #39; doemefu/homelab#212). Remove once Temurin ships cacerts from NSS ≥ 3.131.1.
+
 ### Added
 - NM-4 (#17): Flyway `V5__netmon_login_events` with `login_events` (docs/060 §3.3): upsert do-nothing on `event_id`, CHECKs for outcome, IP source, HMAC format and "subject only on success".
 - Collector `login-events`: every minute pulls the auth-service login-event outbox (`GET /api/v1/login-events`) with a cached `client_credentials` token (`scope=login-events:read`), pages while `hasMore` (max 10 pages per run), keeps the producer's id cursor in `collector_state.cursor` and enriches public client IPs (`seen_in` `login`). Without `AUTH_CLIENT_SECRET` it fails with `credentials` and exports no gauge; a disabled outbox (503) is a success with an `upstream` warning.

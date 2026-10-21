@@ -46,7 +46,7 @@ The analytical data plane of the homelab (ADR 0002, `../docs/adr/0002-network-te
 | Security | `spring-boot-starter-security-oauth2-resource-server` (JWKS + issuer) |
 | Metrics | `micrometer-registry-prometheus` (Boot BOM) |
 | Testcontainers BOM | 2.0.5, `postgres:17-alpine` |
-| Base image | `eclipse-temurin:25-jre-alpine@sha256:…` (build: `25-jdk-alpine@sha256:…`) |
+| Base image | `eclipse-temurin:25-jre-alpine@sha256:…` (build: `25-jdk-alpine@sha256:…`); runtime stage strips the emSign roots from cacerts (temporary, homelab#212) |
 
 ## Conventions
 
