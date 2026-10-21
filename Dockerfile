@@ -18,14 +18,18 @@ WORKDIR /app
 # (https://blog.cloudflare.com/emudhra-certificate-compromise): drop the emSign roots that
 # NSS 3.131.1 removes. Remove this RUN once Temurin ships cacerts from NSS >= 3.131.1
 # (temurin-build PR #4587). Tracking: doemefu/homelab#212 ("eMudhra: third-party images + Temurin follow-up").
-# The ECC G3 delete must succeed (build fails if the alias was renamed); C1/C3 are removed only if present.
+# Each listed root is deleted if present (a failed delete fails the build); the final check fails the build if any of them is still in cacerts, e.g. under a renamed alias.
 # "changeit" is the JDK's public default cacerts password, not a secret.
-RUN keytool -delete -cacerts -storepass changeit -alias "cn_emsign_ecc_root_ca__g3,o_emudhra_technologies_limited,ou_emsign_pki,c_in [jdk]" \
- && for a in "cn_emsign_root_ca__c1,o_emudhra_inc,ou_emsign_pki,c_us [jdk]" "cn_emsign_ecc_root_ca__c3,o_emudhra_inc,ou_emsign_pki,c_us [jdk]"; do \
+RUN for a in "cn_emsign_ecc_root_ca__g3,o_emudhra_technologies_limited,ou_emsign_pki,c_in [jdk]" \
+             "cn_emsign_root_ca__c1,o_emudhra_inc,ou_emsign_pki,c_us [jdk]" \
+             "cn_emsign_ecc_root_ca__c3,o_emudhra_inc,ou_emsign_pki,c_us [jdk]"; do \
       if keytool -list -cacerts -storepass changeit -alias "$a" >/dev/null 2>&1; then \
-        keytool -delete -cacerts -storepass changeit -alias "$a"; \
+        keytool -delete -cacerts -storepass changeit -alias "$a" || exit 1; \
       fi; \
-    done
+    done \
+ && if keytool -list -cacerts -storepass changeit | grep -qiE "emsign_ecc_root_ca__g3|emsign_root_ca__c1|emsign_ecc_root_ca__c3"; then \
+      echo "distrusted emSign root still present in cacerts" >&2; exit 1; \
+    fi
 
 # Non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
