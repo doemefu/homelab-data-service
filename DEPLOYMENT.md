@@ -27,6 +27,18 @@ GitHub Actions `Build and Push` (`.github/workflows/build.yml`) runs on every pu
 
 No `latest` tag is published.
 
+### Temporary trust-store workaround
+
+The runtime stage of the `Dockerfile` has a TEMPORARY `RUN` step for the eMudhra intermediate-CA compromise ([Cloudflare write-up](https://blog.cloudflare.com/emudhra-certificate-compromise); tracking doemefu/homelab#212). It deletes the emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 entries from the Temurin JRE `cacerts`, then fails the build if keytool fails or any of their SHA-256 fingerprints is still present.
+
+Verify in the running pod by SHA-256 fingerprint, so a root kept under a renamed alias is caught too (expected output `0`; kubectl then reports exit code 1 because `grep -c` exits 1 on zero matches; `changeit` is the JDK's public default store password, not a secret):
+
+```bash
+kubectl -n apps exec deploy/data-service -- sh -c 'keytool -list -v -cacerts -storepass changeit | grep -ciE "86:A1:EC:BA:08:9C:4A:8D:3B:BE:27:34:C6:12:BA:34:1D:81:3E:04:3C:F9:E8:A8:62:CD:5C:57:A3:6B:BE:6B|12:56:09:AA:30:1D:A0:A2:49:B9:7A:82:39:CB:6A:34:21:6F:44:DC:AC:9F:39:54:B1:42:92:F2:E8:C8:60:8F|BC:4D:80:9B:15:18:9D:78:DB:3E:1D:8C:F4:F9:72:6A:79:5D:A1:64:3C:A5:F1:35:8E:1D:DB:0E:DC:0D:7E:B3"'
+```
+
+Removal: once Temurin ships `cacerts` built from NSS ≥ 3.131.1 (adoptium/temurin-build#4587), bump both Temurin digests (Dependabot docker PR), delete the `RUN` step including its comment from the `Dockerfile`, and tick the Temurin item in doemefu/homelab#212.
+
 ## Bootstrap sequence (NM-0) — completed 2026-09-23
 
 `k8s/deployment.yaml` starts with the placeholder tag `main-20260923T000000`. That image was never built. auth-service and device-service were bootstrapped the same way: Flux image automation replaces the placeholder with the newest real tag and commits that change to `main`.
