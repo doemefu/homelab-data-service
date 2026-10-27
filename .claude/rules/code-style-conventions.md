@@ -1,3 +1,12 @@
+---
+paths:
+  - "src/**/*.java"
+  - "src/main/resources/**"
+  - "k8s/**"
+  - "pom.xml"
+  - "Dockerfile"
+---
+
 # Code Style & Conventions
 
 ### Java
