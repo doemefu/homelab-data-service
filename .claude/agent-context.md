@@ -1,6 +1,6 @@
 # Agent context — data-service
 
-Repo-specific context for the `homelab-workflow` agents; each agent reads only its own section. The contract lives in `docs/060-network-monitoring.md` in the `homelab` repo (locally `../infrastructure/docs/060-network-monitoring.md`, parent forwarder `../docs/060-network-monitoring.md`).
+Repo-specific context for the `homelab-workflow` agents; each agent reads only its own section. The contract lives in `docs/060-network-monitoring.md` in the `homelab` repo (locally `../infrastructure/docs/060-network-monitoring.md`, parent forwarder `../docs/060-network-monitoring.md`). On any conflict between the notes below and the contract, the contract wins.
 
 ## architect
 
