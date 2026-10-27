@@ -30,8 +30,11 @@ class NetmonSecurityIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void furchertChClientCredentialsToken_isAccepted() throws Exception {
+        // Exactly one value each: a duplicated or merged header would fail stringValues.
         mockMvc.perform(get(STATUS).header("Authorization", "Bearer " + TestJwks.furchertChClientToken()))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(header().stringValues("Cache-Control", "no-store"))
+                .andExpect(header().stringValues("Pragma", "no-cache"));
     }
 
     @Test
@@ -68,7 +71,8 @@ class NetmonSecurityIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.status").value(403))
                 .andExpect(jsonPath("$.code").value("forbidden"))
-                .andExpect(header().string("Cache-Control", "no-store"));
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().string("Pragma", "no-cache"));
     }
 
     @Test
