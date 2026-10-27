@@ -13,6 +13,9 @@
       "Read(/**/?*.sops.yml)",
       "Read(/**/?*.sops.yaml)",
       "Read(/**/?*.sops.json)",
+      "Read(/**/?*.sops.env)",
+      "Read(/**/?*.sops.ini)",
+      "Read(/**/?*.sops.binary)",
       "Read(/**/*.age)",
       "Read(/**/*.pem)",
       "Edit(/.env)",
@@ -26,6 +29,9 @@
       "Edit(/**/?*.sops.yml)",
       "Edit(/**/?*.sops.yaml)",
       "Edit(/**/?*.sops.json)",
+      "Edit(/**/?*.sops.env)",
+      "Edit(/**/?*.sops.ini)",
+      "Edit(/**/?*.sops.binary)",
       "Edit(/**/*.age)",
       "Edit(/**/*.pem)",
       "Bash(git push --force*)",
@@ -33,7 +39,23 @@
       "Bash(git push * --force*)",
       "Bash(git push * -f *)",
       "Bash(git push * -f)",
-      "Bash(git push * +*)"
+      "Bash(git push * +*)",
+      "Bash(git push * --mirror*)",
+      "Bash(git push --mirror*)"
+    ],
+    "ask": [
+      "Bash(gh pr merge *)",
+      "Bash(gh api -X*)",
+      "Bash(gh api * -X*)",
+      "Bash(gh api --method*)",
+      "Bash(gh api * --method*)",
+      "Bash(gh api graphql *mutation*)",
+      "Bash(kubectl apply *)",
+      "Bash(kubectl * apply *)",
+      "Bash(kubectl delete *)",
+      "Bash(kubectl * delete *)",
+      "Bash(kubectl patch *)",
+      "Bash(kubectl * patch *)"
     ]
   },
   "extraKnownMarketplaces": {
