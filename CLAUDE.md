@@ -1,8 +1,6 @@
 # CLAUDE.md — homelab-data-service
 
-> **Session start:** Read `.claude/memory/MEMORY.md` completely if it exists. The topmost entry shows the current state. If there is an entry with `status: in_progress`, read the linked worklog and ask the user: *"I see we were interrupted at [SLUG]. Continue?"* — before doing anything else.
-
-> **After each completed change:** Insert a new block **at the top** of `.claude/memory/MEMORY.md`.
+In-progress worklogs are listed at session start by the `homelab-workflow` plugin; start work with `/homelab-workflow:start-task`. Durable facts go to auto memory.
 
 > `.claude/memory/`, `.claude/worklogs/` and `.claude/worktrees/` are gitignored — local-only; cross-check `git log` and GitHub when they look stale.
 
@@ -33,7 +31,8 @@ The analytical data plane of the homelab (ADR 0002, `../docs/adr/0002-network-te
 - Do **not** log tokens, `Authorization` headers, API keys or IP addresses.
 - Flyway only; never edit a merged migration.
 - Commit, push and open PRs on feature branches without asking (standing permission, 2026-08-28). Merging, force-pushes, playbook runs, cluster mutations and anything touching SOPS/secrets need an explicit go for that task.
-- Before any merge, wait for the Copilot review and fix or answer every comment (see `.claude/rules/workflow.md` Phase 5).
+- Before any merge, wait for the Copilot review and fix or answer every comment (see `/homelab-workflow:review-gate`).
+- Tests are required for every service (unit + integration).
 - All code, comments and documentation in **English**. Minimize diff size: no drive-by refactors.
 
 ## Tech Stack (pinned)
@@ -57,8 +56,28 @@ The analytical data plane of the homelab (ADR 0002, `../docs/adr/0002-network-te
 
 ## Agent Team
 
-Project agents in `.claude/agents/`: `architect` (contract first), `implementer`, `reviewer`, `plan-reviewer` (Phase 3), `doc-auditor` (Phase 6), `documenter`, `devops` (read-only cluster checks).
+Plugin agents `homelab-workflow:<role>` (`architect`, `implementer`, `reviewer`, `plan-reviewer`, `doc-auditor`, `documenter`, `devops`). Repo specifics (contract location, stack, packages, checklists, read-only `devops`) are in `.claude/agent-context.md`, one section per role. There are no repo-only agents.
 
 ## Process & Conventions
 
-Rules in `.claude/rules/`: `workflow.md` (6-phase workflow), `worklog-conventions.md`, `plan-structure.md`, `commands.md`, `code-style-conventions.md`, `review-guidelines.md`, `documentation-files.md`, `github-project.md` (Project #5 status transitions). Worklog template: `.claude/worklog-template.md`.
+Plugin skills: `/homelab-workflow:start-task`, `workflow` (6-phase workflow, worklogs, plan structure), `review-gate`, `project-board` (Project #5), `cross-repo`.
+
+Rules in `.claude/rules/` (path-scoped): `code-style-conventions.md` (Java, Flyway, secrets and privacy), `documentation-files.md` (docs purpose and owner; docs are written in parallel with the code; link to the contract, never copy it).
+
+## Commands
+
+```bash
+./mvnw verify                     # full build + all tests (needs Docker for Testcontainers)
+./mvnw test -Dtest=ClassName      # single test class
+./mvnw clean package -DskipTests  # jar only
+./mvnw spring-boot:run            # run locally on :8082 (DB_PASSWORD env var required)
+docker build -t data-service .    # container image
+actionlint                        # GitHub workflow lint
+kubectl kustomize k8s             # render manifests (offline)
+conftest test --rego-version v0 \
+  --policy ../infrastructure/policy/kubernetes/ --all-namespaces <(kubectl kustomize k8s)
+# read-only cluster access (local dev)
+kubectl -n apps port-forward svc/postgresql 5432:5432
+kubectl -n apps port-forward svc/data-service 8082:8082
+kubectl -n apps get pods -l app=data-service
+```
