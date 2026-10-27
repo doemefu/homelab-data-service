@@ -40,8 +40,8 @@ The analytical data plane of the homelab (ADR 0002, `../docs/adr/0002-network-te
 | Component | Version |
 |-----------|---------|
 | Java | 25 |
-| Spring Boot | 4.1.1 (Tomcat override 11.0.25, as in the siblings) |
-| Data access | `spring-boot-starter-jdbc` (`JdbcClient`), Flyway, PostgreSQL driver 42.7.13 |
+| Spring Boot | 4.1.2 (manages Tomcat 11.0.27, Jackson 2.21.7/3.1.7) |
+| Data access | `spring-boot-starter-jdbc` (`JdbcClient`), Flyway, PostgreSQL driver 42.7.14 |
 | Security | `spring-boot-starter-security-oauth2-resource-server` (JWKS + issuer) |
 | Metrics | `micrometer-registry-prometheus` (Boot BOM) |
 | Testcontainers BOM | 2.0.5, `postgres:17-alpine` |
