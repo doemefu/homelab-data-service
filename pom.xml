@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.1.1</version>
+		<version>4.1.2</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>ch.furchert.homelab</groupId>
@@ -30,12 +30,6 @@
 	</scm>
 	<properties>
 		<java.version>25</java.version>
-		<!-- Override the managed Tomcat version on the Spring Boot 4.1.1 BOM (which still manages
-		     11.0.24) to close 3 critical Dependabot alerts: GHSA-9xv2-5v5q-p794, GHSA-gcx9-497g-6cp6,
-		     GHSA-h3x4-894j-xpx5 (all fixed in 11.0.25). Same override as auth-service/device-service
-		     (tracked in doemefu/homelab-auth-service#89). Remove it once Spring Boot ships a patch
-		     that manages tomcat.version >= 11.0.25. -->
-		<tomcat.version>11.0.25</tomcat.version>
 	</properties>
 
 	<dependencyManagement>
@@ -80,7 +74,7 @@
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
-			<version>42.7.13</version>
+			<version>42.7.14</version>
 			<scope>runtime</scope>
 		</dependency>
 		<dependency>

@@ -27,7 +27,7 @@ Neither ADR is in a git repository yet. Both live in the homelab parent workspac
 |---|---|
 | Port | 8082 (cluster-internal only; no tunnel route) |
 | Package | `ch.furchert.homelab.data` |
-| Stack | Java 25, Spring Boot 4.1.1, Spring Security 7 resource server, JdbcClient (no JPA), Flyway, Micrometer Prometheus |
+| Stack | Java 25, Spring Boot 4.1.2, Spring Security 7 resource server, JdbcClient (no JPA), Flyway, Micrometer Prometheus |
 | Database | PostgreSQL `data_service`, schema `netmon`, history `public.flyway_schema_history_data` |
 | Image | `ghcr.io/doemefu/homelab-data-service:main-<YYYYMMDDTHHMMSS>` (linux/amd64 + linux/arm64) |
 | Deploy | Flux, from `k8s/` (wiring in the `homelab` repo, `cluster/apps/data-service/`) |
