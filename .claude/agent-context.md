@@ -17,7 +17,7 @@ Repo-specific context for the `homelab-workflow` agents; each agent reads only i
 
 ## implementer
 
-- Stack: Java 25, Spring Boot 4.1.1, Spring Security 7 resource server, `JdbcClient` (no JPA), Flyway (history table `public.flyway_schema_history_data`), Micrometer Prometheus, Jackson 3 (`tools.jackson`), Testcontainers `postgres:17-alpine`.
+- Stack: Java 25, Spring Boot 4.1.2, Spring Security 7 resource server, `JdbcClient` (no JPA), Flyway (history table `public.flyway_schema_history_data`), Micrometer Prometheus, Jackson 3 (`tools.jackson`), Testcontainers `postgres:17-alpine`.
 - Also read the contract sections the plan cites (`docs/060-network-monitoring.md` in the `homelab` repo) and `INTERFACES.md` before coding.
 - Packages under `ch.furchert.homelab.data`: `config/`, `security/`, `web/` (problem+json), `netmon/collector/` (runner, state, metrics), `netmon/retention/`, `netmon/api/`, one package per data set (e.g. `netmon/inbound/`).
 - Collectors implement `NetmonCollector`, own their `@Scheduled(cron = ..., zone = "UTC")` trigger and call `CollectorRunner.run(this)`. Expected failures throw `CollectorException` with a self-authored message. Kill switch: `netmon.collectors.<name>.enabled`.
