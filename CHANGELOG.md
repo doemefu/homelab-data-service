@@ -6,6 +6,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 
 ### Security
 - Spring Boot 4.1.1 → 4.1.2 (Jackson 2.21.7/3.1.7 fixes, Tomcat 11.0.27, PostgreSQL driver 42.7.14); the `tomcat.version` override is removed.
+- Deployment hardening (#24): `runAsNonRoot` (uid 100 / gid 101), `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem with an `emptyDir` at `/tmp`.
 - TEMPORARY: the runtime image removes the emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 entries from the JRE cacerts and the build fails if their fingerprints are still present (#38, #39; doemefu/homelab#212). Remove once Temurin ships cacerts from NSS ≥ 3.131.1.
 
 ### Added

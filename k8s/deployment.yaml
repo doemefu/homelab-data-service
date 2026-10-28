@@ -16,12 +16,30 @@ spec:
         app: data-service
     spec:
       automountServiceAccountToken: false
+      # Numeric ids are required for runAsNonRoot: the image's USER is the name `appuser`, which
+      # kubelet cannot verify as non-root. 100/101 are what `adduser -S appuser -G appgroup` assigns
+      # on the pinned alpine base image; re-check them when the base image changes (#24).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: data-service
           # Image tag is managed by Flux CD image automation. The initial tag is a placeholder that
           # was never built (same bootstrap as auth-service/device-service): Flux replaces it with
           # the first main-<timestamp> tag once homelab#115 wires cluster/apps/data-service/.
           image: ghcr.io/doemefu/homelab-data-service:main-20261028T072932 # {"$imagepolicy": "flux-system:data-service"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # /tmp is the only path the JVM writes at runtime (Tomcat work dir, java.io.tmpdir).
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           ports:
             - containerPort: 8082
           env:
@@ -115,3 +133,7 @@ spec:
               port: 8082
             periodSeconds: 5
             failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -10,6 +10,8 @@ data-service runs in namespace `apps` of the homelab k3s cluster and is deployed
 | `service.yaml` | ClusterIP `data-service:8082` (port name `http`) |
 | `kustomization.yaml` | Lists both; this is the path (`./k8s`) that Flux syncs and updates |
 
+The pod is hardened (#24): pod-level `runAsNonRoot` with numeric `runAsUser: 100` / `runAsGroup: 101` (the ids of the image's `appuser`; re-check them when the base image changes), `seccompProfile: RuntimeDefault`; container-level `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]`. `/tmp` (a 64Mi disk-backed `emptyDir`) is the only writable path. After merging, check `kubectl -n apps rollout status deploy/data-service --timeout=400s`; a stalled rollout means revert (the old pod keeps serving meanwhile).
+
 There is no Ingress and no Cloudflare Tunnel route. Only cluster-internal callers (furchert-ch) reach the API.
 
 ### JVM settings
