@@ -1,17 +1,17 @@
 # Agent context — data-service
 
-Repo-specific context for the `homelab-workflow` agents; each agent reads only its own section. The contract lives in `docs/060-network-monitoring.md` in the `homelab` repo (locally `../infrastructure/docs/060-network-monitoring.md`, parent forwarder `../docs/060-network-monitoring.md`). On any conflict between the notes below and the contract, the contract wins.
+Repo-specific context for the `homelab-workflow` agents; each agent reads only its own section. The contracts live in the `homelab` repo: `docs/060-network-monitoring.md` for netmon (locally `../infrastructure/docs/060-network-monitoring.md`, parent forwarder `../docs/060-network-monitoring.md`) and `docs/100-web-analytics.md` for web analytics (locally `../infrastructure/docs/100-web-analytics.md`). On any conflict between the notes below and the contract, the contract wins.
 
 ## architect
 
 - Stack: Java 25 / Spring Boot 4.1 / Spring Security 7 resource server / `JdbcClient` / Flyway.
-- Contract (single source of truth) is `docs/060-network-monitoring.md` in the `homelab` repo, not this repo. A change to the netmon schema, endpoint shape, auth rules, env var names or Secret keys is written there **first**; `INTERFACES.md` then only summarises it.
+- Contracts (single source of truth) are `docs/060-network-monitoring.md` (netmon) and `docs/100-web-analytics.md` (webanalytics) in the `homelab` repo, not this repo. A change to a schema, endpoint shape, auth rules, env var names or Secret keys is written there **first**; `INTERFACES.md` then only summarises it.
 - Read, in order: the contract sections the change touches, `INTERFACES.md`, ADR 0002 (`../docs/adr/0002-network-telemetry-ownership.md`), then the code under `src/main/java/ch/furchert/homelab/data/`.
 - State explicitly:
-  - Flyway: next free `V<n>__netmon_<topic>.sql`, never edit a merged migration, `outOfOrder=false`.
+  - Flyway: next free `V<n>__<schema>_<topic>.sql` (`netmon` or `webanalytics`), never edit a merged migration, `outOfOrder=false`.
   - Every write idempotent (upsert on the natural key or replace-per-window, contract §3.2).
   - Read API: problem+json errors with `code`, `Cache-Control: no-store`, nulls never omitted, `from`/`to` window rules.
-  - Auth: `SCOPE_netmon:read` + `sub` allowlist (v1); no `ROLE_ADMIN` path until furchert-ch#43.
+  - Auth: `SCOPE_netmon:read` + `sub` allowlist (v1); no `ROLE_ADMIN` path until furchert-ch#43. `/api/webanalytics/**`: `SCOPE_analytics:write` + `sub` in `webanalytics.api.write-clients` + no `ROLE_*` authority (docs/100 §6.1).
   - Privacy: IPs are personal data; retention defined, no IPs or tokens in logs or `last_error`.
 - Output: the spec diff (contract + `INTERFACES.md`), open questions, and which consumers (furchert-ch) must follow.
 
@@ -19,10 +19,10 @@ Repo-specific context for the `homelab-workflow` agents; each agent reads only i
 
 - Stack: Java 25, Spring Boot 4.1.2, Spring Security 7 resource server, `JdbcClient` (no JPA), Flyway (history table `public.flyway_schema_history_data`), Micrometer Prometheus, Jackson 3 (`tools.jackson`), Testcontainers `postgres:17-alpine`.
 - Also read the contract sections the plan cites (`docs/060-network-monitoring.md` in the `homelab` repo) and `INTERFACES.md` before coding.
-- Packages under `ch.furchert.homelab.data`: `config/`, `security/`, `web/` (problem+json), `netmon/collector/` (runner, state, metrics), `netmon/retention/`, `netmon/api/`, one package per data set (e.g. `netmon/inbound/`).
+- Packages under `ch.furchert.homelab.data`: `config/`, `security/`, `web/` (problem+json), `netmon/collector/` (runner, state, metrics), `netmon/retention/`, `netmon/api/`, one package per data set (e.g. `netmon/inbound/`), `webanalytics/ingest/` (write API).
 - Collectors implement `NetmonCollector`, own their `@Scheduled(cron = ..., zone = "UTC")` trigger and call `CollectorRunner.run(this)`. Expected failures throw `CollectorException` with a self-authored message. Kill switch: `netmon.collectors.<name>.enabled`.
 - New tables register a `RetentionTarget` bean reading `netmon.retention.<table>-days`.
-- Flyway files `V<n>__netmon_<topic>.sql`, schema `netmon`; next free number at PR time.
+- Flyway files `V<n>__<schema>_<topic>.sql`, schema `netmon` or `webanalytics`; next free number at PR time.
 - Errors go through `web/ProblemDetailsAdvice`; never put third-party exception messages into responses or `collector_state.last_error`.
 - Never log tokens, `Authorization` headers, API keys, GraphQL variables or IP addresses.
 - Pinning: actions by SHA, base images by digest; approved dependency set is docs/060 §12 Q5.
@@ -30,9 +30,9 @@ Repo-specific context for the `homelab-workflow` agents; each agent reads only i
 
 ## reviewer
 
-- [ ] `/api/netmon/**` stays behind `SCOPE_netmon:read` + `sub` in `netmon.api.allowed-clients`; no stray `permitAll()`; actuator exposure limited to health/info/prometheus.
+- [ ] `/api/netmon/**` stays behind `SCOPE_netmon:read` + `sub` in `netmon.api.allowed-clients`; `/api/webanalytics/**` behind `SCOPE_analytics:write` + `sub` in `webanalytics.api.write-clients` + no `ROLE_*`, ending in `denyAll`; no stray `permitAll()`; actuator exposure limited to health/info/prometheus.
 - [ ] No tokens, headers, secrets or IPs in logs, `last_error`, problem `detail` or metrics labels.
-- [ ] Flyway: new `V<n>` only, merged migrations untouched, schema objects in `netmon`.
+- [ ] Flyway: new `V<n>` only, merged migrations untouched, schema objects in `netmon` or `webanalytics`.
 - [ ] Writes idempotent per contract §3.2; truncation before natural-key aggregation.
 - [ ] Response shapes, codes and headers match `docs/060` §7 exactly (camelCase, explicit nulls, `Cache-Control: no-store`).
 - [ ] Collectors: kill switch, UTC cron, catch-up cap and failure rule per §4.1, no-overlap lock.
@@ -72,7 +72,7 @@ Docs to keep in sync (all English):
 - **Secrets:** only env vars / `secretKeyRef`; test keys generated in memory; no credentials in code, fixtures or logs.
 - **Pinning:** actions by SHA, base images by digest; new dependencies must be in the approved set (docs/060 §12 Q5) or owner-approved.
 - **Migrations:** next free `V<n>`, idempotent against an already-migrated DB, never editing merged files.
-- **Auth:** `/api/netmon/**` rules unchanged, or the change is in the contract and `INTERFACES.md` is updated.
+- **Auth:** `/api/netmon/**` and `/api/webanalytics/**` rules unchanged, or the change is in the contract and `INTERFACES.md` is updated.
 - **Collectors:** idempotent writes, catch-up cap, failure rule, kill switch, UTC cron, no overlap; new tables register a `RetentionTarget`.
 - **Tests:** Testcontainers for DB, `MockRestServiceServer` for upstream HTTP, security tests with real JWTs; validation command is `./mvnw verify`.
 - **K8s (if touched):** limits, probes, pinned tag + Flux marker, `secretKeyRef`, namespace `apps`.
@@ -80,7 +80,7 @@ Docs to keep in sync (all English):
 
 ## doc-auditor
 
-- Context: data-service is the analytical data plane (ADR 0002): the central `netmon` Postgres store plus its read API, deployed by Flux into namespace `apps`, cluster-internal only. Secrets come from the `homelab` repo's playbook 59 (Secret `data-service-secrets`).
+- Context: data-service is the analytical data plane (ADR 0002): the central `netmon` Postgres store plus its read API, and the `webanalytics` store with its write API (docs/100), deployed by Flux into namespace `apps`, cluster-internal only. Secrets come from the `homelab` repo's playbook 59 (Secret `data-service-secrets`).
 - `README.md`: status table, quick reference still accurate?
 - `INTERFACES.md`: new/changed endpoint, error code, metric, env var, property, Secret key, consumed service?
 - `DEPLOYMENT.md`: new env var or Secret key (and the owner action to create it), JVM/resource change, new outbound destination, rollback note?

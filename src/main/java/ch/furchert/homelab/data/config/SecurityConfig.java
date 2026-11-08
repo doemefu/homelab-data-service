@@ -1,6 +1,7 @@
 package ch.furchert.homelab.data.config;
 
 import ch.furchert.homelab.data.security.AllowedClientAuthorizationManager;
+import ch.furchert.homelab.data.security.NoUserRoleAuthorizationManager;
 import ch.furchert.homelab.data.security.ProblemJsonAccessDeniedHandler;
 import ch.furchert.homelab.data.security.ProblemJsonAuthenticationEntryPoint;
 import ch.furchert.homelab.data.security.TokenValidationUnavailableFilter;
@@ -8,6 +9,7 @@ import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authorization.AuthorityAuthorizationManager;
 import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.authorization.AuthorizationManagers;
@@ -31,6 +33,8 @@ import java.util.Collection;
 public class SecurityConfig {
 
     static final String NETMON_READ = "SCOPE_netmon:read";
+    static final String ANALYTICS_WRITE = "SCOPE_analytics:write";
+    static final String WEBANALYTICS_EVENTS = "/api/webanalytics/events";
 
     /**
      * Chain 1: the netmon read API (docs/060 §7.1, §7.5). Stateless JWT resource server; v1 grants
@@ -85,6 +89,49 @@ public class SecurityConfig {
                                 "/actuator/prometheus").permitAll()
                         .anyRequest().denyAll())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+        return http.build();
+    }
+
+    /**
+     * Chain 3: the web analytics write API (docs/100 §6.1). Access requires {@code SCOPE_analytics:write} AND a
+     * {@code sub} in {@code webanalytics.api.write-clients} AND no {@code ROLE_*} authority (defence in depth
+     * against role-bearing user tokens; client-credentials tokens carry no role). {@code POST /events} is the
+     * only endpoint; other methods on {@code /events} still need the write token and then get 405 from MVC.
+     * Everything else under the prefix is denied until later sub-projects add their matchers above the
+     * {@code denyAll}. Headers, problem+json errors, JWKS-failure handling and CSRF as in chain 1.
+     */
+    @Bean
+    @Order(3)
+    public SecurityFilterChain webanalyticsApiSecurityFilterChain(HttpSecurity http, WebAnalyticsProperties properties,
+                                                                  JsonMapper jsonMapper) {
+        AuthorizationManager<RequestAuthorizationContext> writeAccess = AuthorizationManagers.allOf(
+                AuthorityAuthorizationManager.hasAuthority(ANALYTICS_WRITE),
+                new AllowedClientAuthorizationManager(properties.api().writeClients()),
+                new NoUserRoleAuthorizationManager());
+        ProblemJsonAuthenticationEntryPoint entryPoint = new ProblemJsonAuthenticationEntryPoint(jsonMapper);
+        ProblemJsonAccessDeniedHandler accessDeniedHandler = new ProblemJsonAccessDeniedHandler(jsonMapper,
+                "The token is not allowed to access web analytics");
+
+        http
+                .securityMatcher("/api/webanalytics/**")
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.POST, WEBANALYTICS_EVENTS).access(writeAccess)
+                        .requestMatchers(WEBANALYTICS_EVENTS).access(writeAccess)
+                        .anyRequest().denyAll())
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .oauth2ResourceServer(rs -> rs
+                        .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+                        .authenticationEntryPoint(entryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(entryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
+                .headers(headers -> headers
+                        .cacheControl(cache -> cache.disable())
+                        .addHeaderWriter(new StaticHeadersWriter("Cache-Control", "no-store"))
+                        .addHeaderWriter(new StaticHeadersWriter("Pragma", "no-cache")))
+                .addFilterBefore(new TokenValidationUnavailableFilter(jsonMapper), BearerTokenAuthenticationFilter.class)
+                .csrf(csrf -> csrf.ignoringRequestMatchers(request -> true));
         return http.build();
     }
 

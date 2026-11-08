@@ -20,6 +20,7 @@ Neither ADR is in a git repository yet. Both live in the homelab parent workspac
 | NM-3 (#15) | Flyway `V3__netmon_lan`; `lan` collector (Prometheus snapshots of the node-script metrics every 15 min); `GET /api/netmon/lan/connections`, `/lan/ufw-blocks`, `/lan/ssh-auth`; `lan` block in `/ips/{ip}` | merged 2026-09-24 (PR #21) |
 | NM-2 (#16) | Flyway `V4__netmon_egress`; `egress` collector (hourly Prometheus snapshots of the coroot-node-agent TCP counters); `GET /api/netmon/egress/top` | merged 2026-09-24 (PR #22) |
 | NM-4 (#17) | Flyway `V5__netmon_login_events`; `login-events` collector (pulls the auth-service login-event outbox every minute with a client-credentials token); `GET /api/netmon/logins/summary`, `/logins/events`; `logins` block in `/ips/{ip}` | in review |
+| WA-1 (#53) | Web analytics (doemefu/homelab#348): Flyway `V6__webanalytics_ingest`; `POST /api/webanalytics/events` (write scope, validation, dedupe, enquiry counter, ingest metrics) | in review |
 
 ## Quick reference
 
@@ -28,7 +29,7 @@ Neither ADR is in a git repository yet. Both live in the homelab parent workspac
 | Port | 8082 (cluster-internal only; no tunnel route) |
 | Package | `ch.furchert.homelab.data` |
 | Stack | Java 25, Spring Boot 4.1.2, Spring Security 7 resource server, JdbcClient (no JPA), Flyway, Micrometer Prometheus |
-| Database | PostgreSQL `data_service`, schema `netmon`, history `public.flyway_schema_history_data` |
+| Database | PostgreSQL `data_service`, schemas `netmon` and `webanalytics`, history `public.flyway_schema_history_data` |
 | Image | `ghcr.io/doemefu/homelab-data-service:main-<YYYYMMDDTHHMMSS>` (linux/amd64 + linux/arm64) |
 | Deploy | Flux, from `k8s/` (wiring in the `homelab` repo, `cluster/apps/data-service/`) |
 

@@ -18,7 +18,7 @@ import java.io.IOException;
  * unreachable), the resource server rethrows {@link AuthenticationServiceException} instead of
  * answering 401. Without this filter the servlet container renders Boot's default JSON error; this
  * keeps the API's problem+json contract (500, {@code code=internal}, docs/060 §7.1).
- * Registered before {@code BearerTokenAuthenticationFilter} in the netmon API chain only.
+ * Registered before {@code BearerTokenAuthenticationFilter} in the netmon and web analytics API chains.
  */
 public final class TokenValidationUnavailableFilter extends OncePerRequestFilter {
 

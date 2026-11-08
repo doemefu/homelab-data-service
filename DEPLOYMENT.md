@@ -170,6 +170,35 @@ done
 
 The journal count includes the overflow row (`src_ip=other`), which the SQL sum covers as well. A mismatch in only one window points at the guard. If every window is 0 in the database, the node has not published: check `/status` for the "node window(s) finalised without the node's bucket" warning.
 
+## WA-1 rollout (#53): web analytics ingest
+
+WA-1 adds the migration `V6__webanalytics_ingest` (schema `webanalytics`, three tables, additive) and `POST /api/webanalytics/events` (contract `docs/100-web-analytics.md` §6, §7 in the `homelab` repo; Epic doemefu/homelab#348). No new env var, Secret key, NetworkPolicy or outbound destination; the write scope comes from auth-service (doemefu/homelab-auth-service#142, Flyway V10, live since 2026-11-08). Nothing writes to the endpoint until furchert-ch WA-2b is merged, and analytics stays dark until WA-6.
+
+1. **Merge this PR.** Flux rolls out the new image; Flyway applies V6 on startup. The WARN line `DB: schema "webanalytics" already exists, skipping` is expected: Flyway creates the listed schema before V6 runs its `CREATE SCHEMA IF NOT EXISTS`.
+2. Smoke test via port-forward (docs/100 §12.3). Request a furchert-ch client-credentials token with `scope=analytics:write` (same client and secret as the `netmon:read` token in "Verification (§11 NM-0)"), read it into `$TOKEN` without echoing it, and never paste tokens into logs or tickets:
+
+   ```bash
+   kubectl -n apps port-forward svc/data-service 8082:8082 &
+   EMPTY='{"events":[],"edgeDrops":{"bot":0,"signed_in":0,"consent":0,"invalid":0,"path":0,"rate_limited":0,"mint_limited":0,"overflow":0,"expired":0}}'
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d "$EMPTY" localhost:8082/api/webanalytics/events   # 401
+   curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$EMPTY" \
+     localhost:8082/api/webanalytics/events                              # {"accepted":0,"duplicates":0,"rejected":0,"capped":false}
+   curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" localhost:8082/api/netmon/status   # 403
+   curl -s localhost:8082/actuator/prometheus | grep -c '^webanalytics_'   # 18 series
+   kubectl -n apps exec postgresql-0 -c postgresql -- psql -U postgres -d data_service -c '\dt webanalytics.*'   # 3 tables
+   ```
+
+3. Database size baseline at WA-1 (2026-11-08): `data_service` 1 409 MB (`netmon.egress_flow_snapshots` 1 329 MB of it), the `data-postgresql-0` filesystem 48 % of 4.9 G. Re-measure with `select pg_size_pretty(pg_database_size('data_service'))` and `df -h` in the PostgreSQL pod; the WA-5 caps and the `WebAnalyticsTableLarge` alert bound the analytics share.
+
+### Troubleshooting (WA-1)
+
+| Symptom | Likely cause |
+|---|---|
+| 403 for the furchert-ch write token | Token requested without `scope=analytics:write`, or auth-service V10 (doemefu/homelab-auth-service#142) not applied; a token with a `role` claim (user token) is always refused |
+| 413 on `POST /api/webanalytics/events` | Batch over 64 KiB or more than 200 events; furchert-ch splits and retries |
+| 400 for every batch | furchert-ch serialises a shape that differs from docs/100 §6.2 (missing or extra key, wrong JSON type); compare with `src/test/resources/webanalytics/c13-fixtures.json` |
+| 500 with `[webanalytics] batch write failed: <class>` | Database unavailable, the 2 s statement timeout, or (a bug) a row that passed validation but hit a V6 CHECK; the log names only the exception class |
+
 ## Verification (§11 NM-0)
 
 ```bash
@@ -191,6 +220,7 @@ A token without `netmon:read` must get 403.
 
 - Code: revert the image tag commit in `k8s/deployment.yaml`, or suspend the Flux Kustomization `data-service`.
 - Schema: migrations are forward-only. An older image ignores newer migrations only if they are additive, so never edit or delete a merged migration.
+- WA-1 (V6, docs/100 §12.4): the previous image starts on a V6 database because Flyway ignores applied future migrations (`spring.flyway.ignore-migration-patterns` default `*:future`, not overridden here). Verified in WA-1 phase 1 and pinned by `WebAnalyticsUpgradeIntegrationTest`. Never edit or undo V6; the `webanalytics` schema simply stays. To stop ingest without a data-service change, set `ANALYTICS_COLLECT_ENABLED=false` in furchert-ch (pod delete).
 - Collectors: set `netmon.collectors.<name>.enabled=false` to stop one source without a code change. Collector names contain dashes (for example `cloudflare-requests`), which a plain env var cannot express, so use `SPRING_APPLICATION_JSON` in the deployment:
 
   ```yaml
