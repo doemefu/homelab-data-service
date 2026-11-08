@@ -68,6 +68,11 @@ public class IngestActivity {
         seeding = false;
     }
 
+    /** The seed query failed: keep counting in memory from startup (the count then starts at 0 for today). */
+    public synchronized void seedFailed() {
+        seeding = false;
+    }
+
     public synchronized Snapshot snapshot() {
         rollDay();
         return new Snapshot(lastEventAt, eventsToday);

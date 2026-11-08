@@ -109,7 +109,10 @@ public class RollupRepository {
         return earliest;
     }
 
-    /** The earliest landing pageview of each window visitor over the whole raw history (first-known channel). */
+    /**
+     * The earliest landing pageview before {@code to} of each window visitor (first-known channel); the caller still
+     * rejects a landing later than the visit it is used for.
+     */
     public Map<UUID, RawEvent> firstLandings(Instant from, Instant to) {
         Map<UUID, RawEvent> landings = new HashMap<>();
         named.query("""
@@ -118,7 +121,8 @@ public class RollupRepository {
                                e.utm_medium, e.utm_campaign, e.device_class, e.engaged_ms, e.scroll_max, e.fits,
                                e.section_mask, e.form_started, e.click_kind, e.click_target, e.click_area
                         FROM webanalytics.events e
-                        WHERE e.event_type = 'pageview' AND e.landing AND e.visitor_id IN (%s)
+                        WHERE e.event_type = 'pageview' AND e.landing AND e.occurred_at < :to
+                          AND e.visitor_id IN (%s)
                         ORDER BY e.visitor_id, e.occurred_at, e.event_id
                         """.formatted(WINDOW_VISITORS),
                 window(from, to), rs -> {

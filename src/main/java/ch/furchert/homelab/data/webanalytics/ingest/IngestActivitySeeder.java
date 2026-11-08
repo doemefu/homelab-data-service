@@ -1,6 +1,9 @@
 package ch.furchert.homelab.data.webanalytics.ingest;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.dao.DataAccessException;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -9,9 +12,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 
-/** Seeds {@link IngestActivity} once at startup from {@code webanalytics.events} (docs/100 §8.2). */
+/**
+ * Seeds {@link IngestActivity} once at startup from {@code webanalytics.events} (docs/100 §8.2). A failing seed query
+ * never aborts startup: it is logged by class name and the activity keeps counting in memory from then on.
+ */
 @Component
 class IngestActivitySeeder {
+
+    private static final Logger log = LoggerFactory.getLogger(IngestActivitySeeder.class);
 
     private final IngestActivity activity;
     private final WebAnalyticsRepository repository;
@@ -28,7 +36,13 @@ class IngestActivitySeeder {
         LocalDate day = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC);
         Instant dayStart = day.atStartOfDay(ZoneOffset.UTC).toInstant();
         activity.seedStarted();
-        WebAnalyticsRepository.Activity stored = repository.activity(dayStart);
-        activity.seedCompleted(day, stored.capCountedToday(), stored.newestReceivedAt());
+        try {
+            WebAnalyticsRepository.Activity stored = repository.activity(dayStart);
+            activity.seedCompleted(day, stored.capCountedToday(), stored.newestReceivedAt());
+        } catch (DataAccessException e) {
+            log.warn("[webanalytics] ingest activity seed failed: {}; counting from startup",
+                    e.getClass().getSimpleName());
+            activity.seedFailed();
+        }
     }
 }

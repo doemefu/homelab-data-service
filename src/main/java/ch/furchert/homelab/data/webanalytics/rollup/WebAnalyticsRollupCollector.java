@@ -259,7 +259,9 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         for (int i = 0; i < included.size(); i++) {
             Visit v = included.get(i);
             RawEvent firstLanding = firstLandings.get(v.visitorId());
-            String firstChannel = v.converting() && firstLanding != null ? Channels.classify(firstLanding) : "";
+            boolean knownBefore = firstLanding != null
+                    && !firstLanding.occurredAt().isAfter(v.firstPageview().occurredAt());
+            String firstChannel = v.converting() && knownBefore ? Channels.classify(firstLanding) : "";
             facts.add(new VisitFacts(v, includedNew.get(i), Channels.classify(v.firstPageview()), firstChannel));
         }
         return new DayVisits(summary, DayAggregator.aggregate(facts, excluded), included.size(), orphans,

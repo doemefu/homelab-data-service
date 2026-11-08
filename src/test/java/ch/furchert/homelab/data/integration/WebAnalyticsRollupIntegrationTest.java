@@ -150,6 +150,21 @@ class WebAnalyticsRollupIntegrationTest extends AbstractRollupIntegrationTest {
     }
 
     @Test
+    void aLandingAfterTheConvertingVisitNeverDecidesTheFirstChannel() {
+        // The converting visit on 2026-11-05 starts without a landing; the visitor's only landing is two days later.
+        // Rolling 2026-11-05 afterwards (catch-up) must not take the later landing: first_channel stays ''.
+        UUID visitor = UUID.randomUUID();
+        rows.pageview(visitor, zurich("2026-11-05T10:00:00"), "/contact");
+        rows.goal(visitor, zurich("2026-11-05T10:03:00"));
+        rows.landing(visitor, zurich("2026-11-07T10:00:00"), "/", "google.com", null);
+        new ch.furchert.homelab.data.support.AggregateRows(jdbc).rollupDay(LocalDate.parse("2026-11-04"), true);
+        collector(clockAt(zurich("2026-11-08T07:30:00"))).collect(); // 2026-11-05 .. 2026-11-07
+
+        assertThat(jdbc.sql("SELECT * FROM webanalytics.daily_conversion WHERE day = '2026-11-05'").query().singleRow())
+                .containsEntry("channel", "internal").containsEntry("first_channel", "");
+    }
+
+    @Test
     void reRunIsIdenticalApartFromTimestamps() {
         UUID visitor = UUID.randomUUID();
         UUID pv = rows.landing(visitor, zurich("2026-11-08T10:00:00"), "/automation", "google.ch", null);
