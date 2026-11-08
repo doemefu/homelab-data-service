@@ -240,7 +240,7 @@ WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, addit
 |---|---|
 | `/status`: `webanalytics-rollup` `lastErrorCode=partial`, message names the CF baseline | The Cloudflare-baseline step failed or its lock was held; the analytics days were written; the next run retries (the backfill only while the table is still empty) |
 | `daily_cf_baseline` stays empty after enabling | netmon holds no request groups yet (Cloudflare collectors without credentials); the backfill retries on every run until netmon has data |
-| `/funnels`, `/paths` or `/audience` return an empty range | No final day with definition 2 yet (`definitionFrom` null) |
+| `/funnels`, `/paths` or `/audience` return an empty range | No final day with definition 2 yet, or none after the newest final definition-1 day (for example after a rollback longer than 30 days; `definitionFrom` null) |
 
 ## Verification (§11 NM-0)
 

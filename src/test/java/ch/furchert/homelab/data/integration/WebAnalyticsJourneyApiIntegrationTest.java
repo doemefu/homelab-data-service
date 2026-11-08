@@ -76,6 +76,20 @@ class WebAnalyticsJourneyApiIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void definitionFromStartsAfterTheNewestFinalDayOfAnOlderDefinition() throws Exception {
+        rows.rollupDay(LAST.minusDays(3), true);    // current definition, then a long rollback ...
+        rows.rollupDay(LAST.minusDays(2), true, 1); // ... left a former-definition day after it
+        rows.rollupDay(LAST.minusDays(1), true);
+        rows.rollupDay(LAST, true);
+        get("/api/webanalytics/funnels?from=2026-11-04&to=2026-11-07")
+                .andExpect(jsonPath("$.definitionFrom").value("2026-11-06"))
+                .andExpect(jsonPath("$.range.from").value("2026-11-06"));
+        rows.rollupDay(LAST.plusDays(1), false, 1); // a provisional former-definition day is never served: ignored
+        get("/api/webanalytics/paths?from=2026-11-04&to=2026-11-07")
+                .andExpect(jsonPath("$.definitionFrom").value("2026-11-06"));
+    }
+
+    @Test
     void pathsFilterOnlyTheTransitions() throws Exception {
         rows.rollupDay(LAST, true);
         rows.visits(LAST, "de", "desktop", 4, 0, 0, 0, 4);

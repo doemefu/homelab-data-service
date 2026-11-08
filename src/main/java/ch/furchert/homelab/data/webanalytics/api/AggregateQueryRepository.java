@@ -241,10 +241,20 @@ class AggregateQueryRepository {
 
     // ---- WA-3b (docs/100 §7.8, §8.2, rev 3.5) ----
 
-    /** First final day rolled up with the current definition; {@code /funnels} and {@code /paths} start there. */
+    /**
+     * Start of the contiguous range of final days rolled up with the current definition: the first such day after
+     * the newest final day with an older definition (for example left by a rollback longer than the 30-day
+     * recompute), so every final day from here on has the WA-3b rows. {@code /funnels}, {@code /paths},
+     * {@code /audience} and the detail previous/next lists start there. Provisional days are never served and do not
+     * count.
+     */
     Optional<LocalDate> definitionFrom(int version) {
-        return Optional.ofNullable(named.queryForObject(
-                "SELECT min(day) FROM webanalytics.rollup_day WHERE final AND definition_version >= :version",
+        return Optional.ofNullable(named.queryForObject("""
+                        SELECT min(day) FROM webanalytics.rollup_day
+                        WHERE final AND definition_version >= :version
+                          AND day > coalesce((SELECT max(day) FROM webanalytics.rollup_day
+                                              WHERE final AND definition_version < :version), DATE '-infinity')
+                        """,
                 new MapSqlParameterSource("version", version), LocalDate.class));
     }
 
