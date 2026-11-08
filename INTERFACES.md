@@ -1,6 +1,6 @@
 # Interfaces — homelab-data-service
 
-The binding contract is `docs/060-network-monitoring.md` in the `homelab` repo ([link](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md), added by doemefu/homelab#126). This file summarises what the current code implements. Section numbers (§) refer to that spec, except in section 1b, where they refer to the web analytics contract `docs/100-web-analytics.md` in the same repo ([link](https://github.com/doemefu/homelab/blob/main/docs/100-web-analytics.md), added by doemefu/homelab#349).
+The binding contract is `docs/060-network-monitoring.md` in the `homelab` repo ([link](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md), added by doemefu/homelab#126). This file summarises what the current code implements. Section numbers (§) refer to that spec, except in section 1b, where they refer to the web analytics contract `docs/100-web-analytics.md` in the same repo ([link](https://github.com/doemefu/homelab/blob/main/docs/100-web-analytics.md), rev 3.3 at a601fc9, added in WA-0, doemefu/homelab#349).
 
 ## 1. Exposed: netmon read API
 
