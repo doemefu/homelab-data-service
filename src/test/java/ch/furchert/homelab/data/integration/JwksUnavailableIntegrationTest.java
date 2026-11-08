@@ -2,6 +2,7 @@ package ch.furchert.homelab.data.integration;
 
 import ch.furchert.homelab.data.AbstractIntegrationTest;
 import ch.furchert.homelab.data.support.TestJwks;
+import ch.furchert.homelab.data.support.WebAnalyticsFixtures;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -11,7 +12,10 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -43,6 +47,20 @@ class JwksUnavailableIntegrationTest {
                 .andExpect(status().isInternalServerError())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.status").value(500))
+                .andExpect(jsonPath("$.code").value("internal"));
+    }
+
+    @Test
+    void webanalyticsWriteTokenWithUnreachableJwks_is500ProblemJson() throws Exception {
+        mockMvc.perform(post(WebAnalyticsFixtures.EVENTS)
+                        .header("Authorization", "Bearer " + WebAnalyticsFixtures.writeToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(WebAnalyticsFixtures.batch(List.of())))
+                .andExpect(status().isInternalServerError())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().string("Pragma", "no-cache"))
                 .andExpect(jsonPath("$.status").value(500))
                 .andExpect(jsonPath("$.code").value("internal"));
     }

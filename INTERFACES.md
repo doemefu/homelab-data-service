@@ -1,6 +1,6 @@
 # Interfaces — homelab-data-service
 
-The binding contract is `docs/060-network-monitoring.md` in the `homelab` repo ([link](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md), added by doemefu/homelab#126). This file summarises what the current code implements. Section numbers (§) refer to that spec.
+The binding contract is `docs/060-network-monitoring.md` in the `homelab` repo ([link](https://github.com/doemefu/homelab/blob/main/docs/060-network-monitoring.md), added by doemefu/homelab#126). This file summarises what the current code implements. Section numbers (§) refer to that spec, except in section 1b, where they refer to the web analytics contract `docs/100-web-analytics.md` in the same repo ([link](https://github.com/doemefu/homelab/blob/main/docs/100-web-analytics.md), added by doemefu/homelab#349).
 
 ## 1. Exposed: netmon read API
 
@@ -201,6 +201,62 @@ Form-login outcomes from auth-service (`login_events`, `occurred_at` in `[from, 
 - `clientIp` is `null` when auth-service saw no valid IP. `ipSource` is `cf-connecting-ip` or `remote-addr`; both are header-derived and spoofable in-cluster (docs/060 §10). `subject` is set only for `success`.
 - Only the first 8 hex characters of the username HMAC are served; the full HMAC never leaves the database.
 
+## 1b. Exposed: web analytics write API (WA-1)
+
+Contract: `docs/100-web-analytics.md` §6.1 to §6.3, §7.2, §7.9 (Epic doemefu/homelab#348, issue #53). Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:8082/api/webanalytics`. The only caller is furchert-ch's server-side forward queue. Deferred to WA-5 (#56): caps and 429, `DELETE /visitors/{id}` with tombstones, retention of `events`, the capped/today/table-bytes gauges. The read API follows in WA-3a.
+
+### Authentication and authorization (§6.1)
+
+- `Authorization: Bearer <JWT>` from auth-service; signature, `exp` and `iss` validated as for netmon.
+- Access requires scope `analytics:write` **and** a `sub` in `webanalytics.api.write-clients` (default `[furchert-ch]`) **and** no `ROLE_*` authority. auth-service puts `role` only into user-driven tokens, so the last rule is defence in depth against role-bearing user tokens (for example a username equal to a client id, or a user token that obtained the scope through an authorization-code flow). It is not a positive client-credentials check; that one belongs to doemefu/homelab-auth-service#143.
+- A write token has no access to `/api/netmon/**` (403), and a `netmon:read` or `analytics:read` token has no access here (403).
+- Token request (one token per scope, never combined):
+
+  ```
+  POST http://auth-service.apps.svc.cluster.local:8080/oauth2/token
+  Authorization: Basic base64(furchert-ch:<client secret>)
+  Content-Type: application/x-www-form-urlencoded
+
+  grant_type=client_credentials&scope=analytics:write
+  ```
+
+### `POST /api/webanalytics/events` (§6.2)
+
+Body: `{"events": [...], "edgeDrops": {...}}` with exactly the §6.2 shapes: 28 event fields and the nine `edgeDrops` keys (`bot`, `signed_in`, `consent`, `invalid`, `path`, `rate_limited`, `mint_limited`, `overflow`, `expired`). Every key must be present (`null` where absent); `events` may be empty.
+
+| Status | When |
+|---|---|
+| 200 | Envelope valid: `{"accepted": n, "duplicates": n, "rejected": n, "capped": false}` |
+| 400 `invalid_parameter` | Not JSON, unknown, duplicate or missing key, wrong JSON type (no coercion between numbers, strings and booleans), nesting > 8, a string > 512 characters, `events`/`edgeDrops` null, an `edgeDrops` count null or outside 0..1 000 000 |
+| 401 / 403 | Token missing or invalid / scope, `sub` or `ROLE_*` rule not met |
+| 405 `invalid_parameter` | Any method but `POST` (with a write token; without one 401) |
+| 413 `invalid_parameter` | Body > 64 KiB (Content-Length, or counted while reading a chunked body), or more than 200 events (furchert-ch splits the batch on 413) |
+| 415 `invalid_parameter` | Content type not `application/json` |
+| 500 `internal` | Storage failure, or token validation impossible (JWKS unreachable) |
+
+Every response, including 401/403/405, carries `Cache-Control: no-store` and `Pragma: no-cache`. Problem `detail` texts are fixed and never echo input.
+
+**Per event** (a failing event is rejected alone; the batch still answers 200). Rules run in this order; the first failure is the reason (`webanalytics_events_rejected_total{reason}`):
+
+| Reason | Rule |
+|---|---|
+| `shape` | `eventId` not a lowercase UUID v4; per-type null pattern violated (fields of another type set, required fields missing, `referrerDomain`/UTM on a non-landing pageview, enquiry with any non-core field); `clickTarget` set for `mailto`/`tel` or missing otherwise; `visitorId`/`pageviewId` not a lowercase UUID v4; malformed `referrerDomain`, UTM (incl. a run of ≥ 6 digits) or click target (`cta`/`link`/`faq` id pattern, `lang` `de`/`en`, `outbound` host) |
+| `enum` | `type`, `locale`, `deviceClass`, `browserFamily`, `osFamily`, `viewport`, `clickKind`, `clickArea`, `goal` outside their vocabulary; `country` not `^[A-Z]{2}$` or `XX`/`T1` |
+| `range` | `seq` not 0 (pageview) or 1..99 (engagement, click); `engagedMs` outside 0..1 800 000; `scrollMax` not a step; `sectionMask` outside 0..255 |
+| `time` | `occurredAt`/`receivedAt` not ISO-8601 instants; `receivedAt` outside [now − 2 h, now + 1 min]; `occurredAt` outside [`receivedAt` − 15 min, `receivedAt`] |
+| `path` | `path` or a `nav` target not matching `^/([a-z0-9][a-z0-9-]{0,63}(/[a-z0-9][a-z0-9-]{0,63}){0,2})?$` (max 200); `nav` also accepts `(other)` |
+| `other` | `(pageviewId, seq)` already taken by another `eventId` (in the batch or stored) |
+
+data-service checks the patterns of furchert-ch's registries (`TRACKED_PATHS`, `TRACK_IDS`), not the registries themselves. The canonical C13 fixtures are [`src/test/resources/webanalytics/c13-fixtures.json`](src/test/resources/webanalytics/c13-fixtures.json) (forwarded model, `<uuid>` and `now±Nm` tokens, one expected outcome per case); furchert-ch copies the file for its forward-model contract test.
+
+**Storage and dedupe:** analytics events go to `webanalytics.events` with `INSERT … ON CONFLICT DO NOTHING` in one transaction per batch (`statement_timeout` 2 s). A known `eventId` (stored or earlier in the batch) counts as a duplicate. The validator is a strict superset of the table's CHECKs, because a CHECK violation would fail the whole batch and PostgreSQL would log the failing row (incl. the visitor id) in its server log; data-service itself logs only the exception class (`[webanalytics] batch write failed: <class>`).
+
+**Enquiries:** an `enquiry` carries only `eventId`, `type`, `occurredAt`, `receivedAt`; any other non-null field rejects it (`shape`). A valid enquiry increments `daily_enquiries` for the Europe/Zurich day of `occurredAt` and `webanalytics_enquiries_total`; it never creates an `events` row and appears in none of the response counters. Its `eventId` is deduplicated in memory for 2 h (a repeat is ignored silently; the memory is lost on restart and valid for one replica). An invalid enquiry counts as `rejected`.
+
+**Ingest statistics:** every batch adds its counts to `daily_ingest_stats` for the Europe/Zurich day of receipt: `accepted` and `duplicate` (reason `''`), `rejected` (the reason above) and `edge` (the `edgeDrops` key). Zero counts write no row; enquiries are not counted there.
+
+**Accepted residuals:** a batch that failed with 5xx and is retried reports its `edgeDrops` again unless furchert-ch zeroes them on retry (spec §6.2); two concurrent batches that reuse the same `(pageviewId, seq)` with different ids can classify the loser as a duplicate instead of `other`.
+
 ## 2. Exposed: actuator
 
 | Path | Access | Purpose |
@@ -215,6 +271,14 @@ Form-login outcomes from auth-service (`login_events`, `occurred_at` in `[from, 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `netmon_collector_last_success_timestamp_seconds` | gauge | `collector` | Unix time of the collector's last successful run; **NaN until the first success** (§4.1). Registered at startup only for collectors that are enabled and able to succeed. No series is exported for a collector whose kill switch is off, for `reputation` without `ABUSEIPDB_API_KEY`, or for `cloudflare-requests`/`cloudflare-firewall` started without `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID`, or for `login-events` started without `AUTH_CLIENT_SECRET`. Those three still run and report `credentials` in `/status`. |
+
+| `webanalytics_events_accepted_total` | counter | — | Analytics events stored (enquiries excluded) |
+| `webanalytics_events_duplicate_total` | counter | — | Analytics events whose `eventId` was already stored or earlier in the batch |
+| `webanalytics_enquiries_total` | counter | — | `daily_enquiries` increments |
+| `webanalytics_events_rejected_total` | counter | `reason` (`shape`, `enum`, `range`, `time`, `path`, `other`) | Events rejected by the second-line validation, enquiries included |
+| `webanalytics_edge_dropped_total` | counter | `reason` (the nine `edgeDrops` keys) | Events furchert-ch dropped before forwarding, as reported per batch |
+
+The `webanalytics_*` counters are recorded after the batch's transaction commits and are exported with 0 from startup.
 
 The `NetmonCollectorStale` rule is owned by the infra repo (doemefu/homelab#116, PR #131). It treats a NaN sample as "never succeeded" once the pod (`kube_pod_start_time`) is older than the collector's threshold. The thresholds are 26 h for `blocklists`/`retention`, 3 h for `egress`, 90 min for `lan`/`reputation`, and 15 min for every other collector (the 5-minute collectors `cloudflare-requests`/`cloudflare-firewall` and the 1-minute `login-events`). Because unconfigured collectors export no series, the rule never fires for a collector that is off on purpose.
 
@@ -249,6 +313,10 @@ The four destinations on the internet (Cloudflare, Spamhaus, GitHub, AbuseIPDB) 
 | `netmon.ssh_auth_snapshots` | data-service | V3. sshd outcomes per 15-minute bucket, node and source; replaced per `(window_start, node)`. Retention 90 d. |
 | `netmon.egress_flow_snapshots` | data-service | V4. Outbound TCP flows per hour, node, `container_id`, destination and post-NAT destination: bytes, connects, failed connects, FQDN, scope, `is_new`; replaced per `window_start`, at most 2 000 rows per hour. `destination_ip` is null for name-only destinations; `destination_host` (generated) is the IP or the name. Retention 30 d. |
 | `netmon.login_events` | data-service | V5. Form-login attempts pulled from the auth-service outbox: outcome, client IP and its source, username HMAC, subject (success only), user agent; upsert do-nothing on `event_id`. Retention 180 d. |
+| Schema `webanalytics` | data-service | V6 (docs/100 §7.1); `spring.flyway.schemas: public,netmon,webanalytics` |
+| `webanalytics.events` | data-service | V6. Accepted pageview, engagement, click and goal events with the pseudonymous `visitor_id` (never leaves data-service); `INSERT … ON CONFLICT DO NOTHING` on `event_id` and `(pageview_id, seq)`; shape, vocabulary, range and time CHECKs. No retention yet (WA-5: 396 d). |
+| `webanalytics.daily_ingest_stats` | data-service | V6. Id-free counts per Zurich day, `stage` and `reason`; upsert-increment at ingest; never touched by the rollup, no retention. |
+| `webanalytics.daily_enquiries` | data-service | V6. Id-free count of successful contact submissions per Zurich day; increment-only, no retention. |
 | `public.flyway_schema_history_data` | data-service | Flyway history |
 
 No other service reads or writes this database.
@@ -296,5 +364,7 @@ No other service reads or writes this database.
 | `netmon.egress.max-rows-per-window` | `2000` | Row cap per hour, kept by bytes sent then connects; exceeding it reports `truncated` |
 | `netmon.egress.pod-cidr` / `service-cidr` / `lan-cidr` | `10.42.0.0/16` / `10.43.0.0/16` / `192.168.1.0/24` | Destination scope `pod` / `service` / `lan`; loopback is `loopback`, everything else `external` |
 | `netmon.scheduling.enabled` | `true` | Turns every `@Scheduled` trigger off (the test suite sets `false`) |
+| `webanalytics.api.write-clients` | `[furchert-ch]` | Token `sub` values allowed on `POST /api/webanalytics/events`; empty admits nobody |
+| `webanalytics.timezone` | `Europe/Zurich` | Day boundary of `daily_ingest_stats` and `daily_enquiries` |
 
 Kubernetes Secret `data-service-secrets` (ns `apps`, created by the `homelab` repo's playbook 59): keys `db-username`, `db-password`; NM-1 reads `cloudflare-api-token` → `CLOUDFLARE_API_TOKEN`, `cloudflare-zone-id` → `CLOUDFLARE_ZONE_ID` (both added by doemefu/homelab#116) and `abuseipdb-api-key` → `ABUSEIPDB_API_KEY` (optional; set via playbook 59, doemefu/homelab#146; the reputation collector is disabled while the key is absent). All three `secretKeyRef`s are `optional: true`. NM-4 adds `auth-client-secret` (§9).

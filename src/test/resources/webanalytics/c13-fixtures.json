@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "contract": "docs/100-web-analytics.md §6.2 (canonical: infrastructure/docs/100-web-analytics.md in doemefu/homelab). Canonical copy of the C13 fixtures; furchert-ch copies this file for its forward-model contract test.",
+  "tokens": {
+    "<uuid>": "a fresh lowercase UUID v4 per materialisation",
+    "now±Nm": "the instant N minutes before (-) or after (+) the test's now, ISO-8601 UTC with Z"
+  },
+  "bases": {
+    "pageview": {
+      "eventId": "<uuid>", "type": "pageview", "occurredAt": "now-2m", "receivedAt": "now-1m",
+      "visitorId": "<uuid>", "pageviewId": "<uuid>", "seq": 0, "path": "/automation", "locale": "de",
+      "landing": true, "referrerDomain": "google.com", "utmSource": "linkedin", "utmMedium": "social", "utmCampaign": "2026-11-ki",
+      "country": "CH", "deviceClass": "desktop", "browserFamily": "firefox", "osFamily": "macos", "viewport": "1024-1439",
+      "engagedMs": null, "scrollMax": null, "fits": null, "sectionMask": null, "formStarted": null,
+      "clickKind": null, "clickTarget": null, "clickArea": null, "goal": null
+    },
+    "engagement": {
+      "eventId": "<uuid>", "type": "engagement", "occurredAt": "now-2m", "receivedAt": "now-1m",
+      "visitorId": "<uuid>", "pageviewId": "<uuid>", "seq": 2, "path": "/automation", "locale": "de",
+      "landing": null, "referrerDomain": null, "utmSource": null, "utmMedium": null, "utmCampaign": null,
+      "country": null, "deviceClass": null, "browserFamily": null, "osFamily": null, "viewport": null,
+      "engagedMs": 31000, "scrollMax": 75, "fits": false, "sectionMask": 11, "formStarted": false,
+      "clickKind": null, "clickTarget": null, "clickArea": null, "goal": null
+    },
+    "click": {
+      "eventId": "<uuid>", "type": "click", "occurredAt": "now-2m", "receivedAt": "now-1m",
+      "visitorId": "<uuid>", "pageviewId": "<uuid>", "seq": 1, "path": "/automation", "locale": "de",
+      "landing": null, "referrerDomain": null, "utmSource": null, "utmMedium": null, "utmCampaign": null,
+      "country": null, "deviceClass": null, "browserFamily": null, "osFamily": null, "viewport": null,
+      "engagedMs": null, "scrollMax": null, "fits": null, "sectionMask": null, "formStarted": null,
+      "clickKind": "cta", "clickTarget": "automation-hero", "clickArea": "main", "goal": null
+    },
+    "goal": {
+      "eventId": "<uuid>", "type": "goal", "occurredAt": "now-1m", "receivedAt": "now-1m",
+      "visitorId": "<uuid>", "pageviewId": null, "seq": null, "path": "/contact", "locale": "de",
+      "landing": null, "referrerDomain": null, "utmSource": null, "utmMedium": null, "utmCampaign": null,
+      "country": null, "deviceClass": null, "browserFamily": null, "osFamily": null, "viewport": null,
+      "engagedMs": null, "scrollMax": null, "fits": null, "sectionMask": null, "formStarted": null,
+      "clickKind": null, "clickTarget": null, "clickArea": null, "goal": "contact_submit"
+    },
+    "enquiry": {
+      "eventId": "<uuid>", "type": "enquiry", "occurredAt": "now-1m", "receivedAt": "now-1m",
+      "visitorId": null, "pageviewId": null, "seq": null, "path": null, "locale": null,
+      "landing": null, "referrerDomain": null, "utmSource": null, "utmMedium": null, "utmCampaign": null,
+      "country": null, "deviceClass": null, "browserFamily": null, "osFamily": null, "viewport": null,
+      "engagedMs": null, "scrollMax": null, "fits": null, "sectionMask": null, "formStarted": null,
+      "clickKind": null, "clickTarget": null, "clickArea": null, "goal": null
+    }
+  },
+  "cases": [
+    {"name": "pageview landing", "base": "pageview", "set": {}, "expect": "accepted"},
+    {"name": "pageview not landing", "base": "pageview", "set": {"landing": false, "referrerDomain": null, "utmSource": null, "utmMedium": null, "utmCampaign": null}, "expect": "accepted"},
+    {"name": "pageview without country and viewport", "base": "pageview", "set": {"country": null, "viewport": null}, "expect": "accepted"},
+    {"name": "pageview home path", "base": "pageview", "set": {"path": "/", "locale": "en"}, "expect": "accepted"},
+    {"name": "pageview project detail path", "base": "pageview", "set": {"path": "/projects/home-lab-2"}, "expect": "accepted"},
+    {"name": "engagement", "base": "engagement", "set": {}, "expect": "accepted"},
+    {"name": "engagement at engagedMs cap and seq 99", "base": "engagement", "set": {"engagedMs": 1800000, "seq": 99, "scrollMax": 100, "sectionMask": 255}, "expect": "accepted"},
+    {"name": "click cta", "base": "click", "set": {}, "expect": "accepted"},
+    {"name": "click mailto without target", "base": "click", "set": {"clickKind": "mailto", "clickTarget": null}, "expect": "accepted"},
+    {"name": "click tel without target", "base": "click", "set": {"clickKind": "tel", "clickTarget": null, "clickArea": "footer"}, "expect": "accepted"},
+    {"name": "click outbound host", "base": "click", "set": {"clickKind": "outbound", "clickTarget": "github.com"}, "expect": "accepted"},
+    {"name": "click nav path", "base": "click", "set": {"clickKind": "nav", "clickTarget": "/projects", "clickArea": "header"}, "expect": "accepted"},
+    {"name": "click nav other", "base": "click", "set": {"clickKind": "nav", "clickTarget": "(other)", "clickArea": "header"}, "expect": "accepted"},
+    {"name": "click lang", "base": "click", "set": {"clickKind": "lang", "clickTarget": "en", "clickArea": "header"}, "expect": "accepted"},
+    {"name": "goal", "base": "goal", "set": {}, "expect": "accepted"},
+    {"name": "enquiry", "base": "enquiry", "set": {}, "expect": "accepted"},
+
+    {"name": "eventId uppercase", "base": "pageview", "set": {"eventId": "3F0C6E5A-1B2C-4D3E-8F40-5A6B7C8D9E0F"}, "expect": "rejected:shape"},
+    {"name": "eventId not version 4", "base": "pageview", "set": {"eventId": "3f0c6e5a-1b2c-1d3e-8f40-5a6b7c8d9e0f"}, "expect": "rejected:shape"},
+    {"name": "eventId null", "base": "click", "set": {"eventId": null}, "expect": "rejected:shape"},
+    {"name": "pageview without visitorId", "base": "pageview", "set": {"visitorId": null}, "expect": "rejected:shape"},
+    {"name": "pageview with an engagement field", "base": "pageview", "set": {"engagedMs": 1000}, "expect": "rejected:shape"},
+    {"name": "pageview not landing with referrer", "base": "pageview", "set": {"landing": false}, "expect": "rejected:shape"},
+    {"name": "engagement with a pageview field", "base": "engagement", "set": {"country": "CH"}, "expect": "rejected:shape"},
+    {"name": "engagement without fits", "base": "engagement", "set": {"fits": null}, "expect": "rejected:shape"},
+    {"name": "click mailto with target", "base": "click", "set": {"clickKind": "mailto", "clickTarget": "someone@example.com"}, "expect": "rejected:shape"},
+    {"name": "click tel with target", "base": "click", "set": {"clickKind": "tel", "clickTarget": "+41000000000"}, "expect": "rejected:shape"},
+    {"name": "click cta without target", "base": "click", "set": {"clickTarget": null}, "expect": "rejected:shape"},
+    {"name": "goal with pageviewId", "base": "goal", "set": {"pageviewId": "<uuid>"}, "expect": "rejected:shape"},
+    {"name": "goal without visitorId", "base": "goal", "set": {"visitorId": null}, "expect": "rejected:shape"},
+    {"name": "enquiry with visitorId", "base": "enquiry", "set": {"visitorId": "<uuid>"}, "expect": "rejected:shape"},
+    {"name": "enquiry with path", "base": "enquiry", "set": {"path": "/contact"}, "expect": "rejected:shape"},
+    {"name": "enquiry with locale", "base": "enquiry", "set": {"locale": "de"}, "expect": "rejected:shape"},
+    {"name": "utm with a run of six digits", "base": "pageview", "set": {"utmCampaign": "promo-123456"}, "expect": "rejected:shape"},
+    {"name": "utm uppercase", "base": "pageview", "set": {"utmSource": "LinkedIn"}, "expect": "rejected:shape"},
+    {"name": "referrer as URL", "base": "pageview", "set": {"referrerDomain": "https://google.com/search"}, "expect": "rejected:shape"},
+    {"name": "outbound target with path", "base": "click", "set": {"clickKind": "outbound", "clickTarget": "evil.com/x"}, "expect": "rejected:shape"},
+    {"name": "cta target with underscore", "base": "click", "set": {"clickTarget": "bad_id"}, "expect": "rejected:shape"},
+    {"name": "lang target unknown", "base": "click", "set": {"clickKind": "lang", "clickTarget": "fr"}, "expect": "rejected:shape"},
+
+    {"name": "type scroll", "base": "pageview", "set": {"type": "scroll"}, "expect": "rejected:enum"},
+    {"name": "type null", "base": "pageview", "set": {"type": null}, "expect": "rejected:enum"},
+    {"name": "locale fr", "base": "pageview", "set": {"locale": "fr"}, "expect": "rejected:enum"},
+    {"name": "deviceClass phone", "base": "pageview", "set": {"deviceClass": "phone"}, "expect": "rejected:enum"},
+    {"name": "browserFamily opera", "base": "pageview", "set": {"browserFamily": "opera"}, "expect": "rejected:enum"},
+    {"name": "osFamily unix", "base": "pageview", "set": {"osFamily": "unix"}, "expect": "rejected:enum"},
+    {"name": "viewport pixel width", "base": "pageview", "set": {"viewport": "1000"}, "expect": "rejected:enum"},
+    {"name": "country XX", "base": "pageview", "set": {"country": "XX"}, "expect": "rejected:enum"},
+    {"name": "country T1", "base": "pageview", "set": {"country": "T1"}, "expect": "rejected:enum"},
+    {"name": "country lowercase", "base": "pageview", "set": {"country": "ch"}, "expect": "rejected:enum"},
+    {"name": "clickKind hover", "base": "click", "set": {"clickKind": "hover"}, "expect": "rejected:enum"},
+    {"name": "clickArea sidebar", "base": "click", "set": {"clickArea": "sidebar"}, "expect": "rejected:enum"},
+    {"name": "goal signup", "base": "goal", "set": {"goal": "signup"}, "expect": "rejected:enum"},
+
+    {"name": "pageview seq 1", "base": "pageview", "set": {"seq": 1}, "expect": "rejected:range"},
+    {"name": "engagement seq 0", "base": "engagement", "set": {"seq": 0}, "expect": "rejected:range"},
+    {"name": "click seq 100", "base": "click", "set": {"seq": 100}, "expect": "rejected:range"},
+    {"name": "engagedMs over cap", "base": "engagement", "set": {"engagedMs": 1800001}, "expect": "rejected:range"},
+    {"name": "engagedMs negative", "base": "engagement", "set": {"engagedMs": -1}, "expect": "rejected:range"},
+    {"name": "scrollMax not a step", "base": "engagement", "set": {"scrollMax": 33}, "expect": "rejected:range"},
+    {"name": "sectionMask over 255", "base": "engagement", "set": {"sectionMask": 256}, "expect": "rejected:range"},
+
+    {"name": "receivedAt older than 2 h", "base": "pageview", "set": {"occurredAt": "now-125m", "receivedAt": "now-121m"}, "expect": "rejected:time"},
+    {"name": "receivedAt in the future", "base": "pageview", "set": {"occurredAt": "now+2m", "receivedAt": "now+2m"}, "expect": "rejected:time"},
+    {"name": "occurredAt after receivedAt", "base": "pageview", "set": {"occurredAt": "now-1m", "receivedAt": "now-2m"}, "expect": "rejected:time"},
+    {"name": "occurredAt more than 15 min before receivedAt", "base": "pageview", "set": {"occurredAt": "now-17m", "receivedAt": "now-1m"}, "expect": "rejected:time"},
+    {"name": "occurredAt not an instant", "base": "pageview", "set": {"occurredAt": "yesterday"}, "expect": "rejected:time"},
+    {"name": "occurredAt without zone", "base": "pageview", "set": {"occurredAt": "2026-11-08T15:00:00"}, "expect": "rejected:time"},
+    {"name": "receivedAt null", "base": "enquiry", "set": {"receivedAt": null}, "expect": "rejected:time"},
+
+    {"name": "path with trailing slash", "base": "pageview", "set": {"path": "/automation/"}, "expect": "rejected:path"},
+    {"name": "path with fragment", "base": "pageview", "set": {"path": "/automation#faq"}, "expect": "rejected:path"},
+    {"name": "path uppercase", "base": "pageview", "set": {"path": "/Automation"}, "expect": "rejected:path"},
+    {"name": "path with four segments", "base": "pageview", "set": {"path": "/a/b/c/d"}, "expect": "rejected:path"},
+    {"name": "path with query", "base": "pageview", "set": {"path": "/automation?utm_source=x"}, "expect": "rejected:path"},
+    {"name": "nav target not a path", "base": "click", "set": {"clickKind": "nav", "clickTarget": "/Foo"}, "expect": "rejected:path"}
+  ]
+}
