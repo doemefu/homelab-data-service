@@ -18,11 +18,15 @@ public record WebAnalyticsProperties(@DefaultValue Api api, @DefaultValue("Europ
     /**
      * @param writeClients token {@code sub} values allowed to call {@code POST /api/webanalytics/events}
      *                     (default {@code furchert-ch}); an empty list admits nobody
+     * @param readClients  token {@code sub} values allowed to call the read API {@code GET /api/webanalytics/*}
+     *                     (default {@code furchert-ch}); an empty list admits nobody
      */
-    public record Api(@DefaultValue("furchert-ch") List<String> writeClients) {
+    public record Api(@DefaultValue("furchert-ch") List<String> writeClients,
+                      @DefaultValue("furchert-ch") List<String> readClients) {
 
         public Api {
             writeClients = writeClients == null ? List.of() : List.copyOf(writeClients);
+            readClients = readClients == null ? List.of() : List.copyOf(readClients);
         }
     }
 }

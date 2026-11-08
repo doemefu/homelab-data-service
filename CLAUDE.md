@@ -52,7 +52,8 @@ The analytical data plane of the homelab (ADR 0002, `../docs/adr/0002-network-te
 - Collectors implement `NetmonCollector`, schedule themselves in UTC and run through `CollectorRunner` (kill switch `netmon.collectors.<name>.enabled`, no-overlap lock, `collector_state` bookkeeping, freshness gauge).
 - Each new table registers a `RetentionTarget` for the daily retention job (webanalytics: only `events`, from WA-5, docs/100 §7.7).
 - `/api/netmon/**`: `SCOPE_netmon:read` + `sub` in `netmon.api.allowed-clients`; problem+json errors with `code`; `Cache-Control: no-store`.
-- `/api/webanalytics/**`: own chain, `SCOPE_analytics:write` + `sub` in `webanalytics.api.write-clients` + no `ROLE_*`, `denyAll` for anything not matched; same error and header rules.
+- `/api/webanalytics/**`: own chain; writes `SCOPE_analytics:write` + `sub` in `webanalytics.api.write-clients`, reads `SCOPE_analytics:read` + `sub` in `webanalytics.api.read-clients`, both with no `ROLE_*`; `denyAll` for anything not matched; same error and header rules.
+- Web analytics collectors use `group() = webanalytics` (listed in `/api/webanalytics/status`, not `/api/netmon/status`); the rollup's crons run in Europe/Zurich (documented exception) and it ships disabled (gate N1).
 - Tests: Testcontainers for DB code; real RS256 JWTs against the in-test JWKS (`support/TestJwks`) for security paths; `MockRestServiceServer` for upstream HTTP.
 
 ## Agent Team

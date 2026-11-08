@@ -9,11 +9,27 @@ import java.time.Duration;
  */
 public interface NetmonCollector {
 
+    String NETMON_GROUP = "netmon";
+    String WEBANALYTICS_GROUP = "webanalytics";
+
     /** The {@code netmon.collector_state.collector} key, e.g. {@code retention}. */
     String name();
 
-    /** Nominal interval between runs; {@code stale} in the status API is 3 x this value. */
+    /** Nominal interval between runs; {@code stale} in the status API is {@link #staleAfter()} (default 3 x this). */
     Duration cadence();
+
+    /** Age of the last success after which the status API reports {@code stale}; default 3 x {@link #cadence()}. */
+    default Duration staleAfter() {
+        return cadence().multipliedBy(3);
+    }
+
+    /**
+     * Status group: {@code netmon} (default) collectors appear in {@code /api/netmon/status}, {@code webanalytics}
+     * collectors in {@code /api/webanalytics/status} (docs/100 §7.5).
+     */
+    default String group() {
+        return NETMON_GROUP;
+    }
 
     /**
      * {@code false} when the collector lacks required configuration and must not run at all (e.g.

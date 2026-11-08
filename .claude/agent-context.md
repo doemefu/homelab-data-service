@@ -11,7 +11,7 @@ Repo-specific context for the `homelab-workflow` agents; each agent reads only i
   - Flyway: next free `V<n>__<schema>_<topic>.sql` (`netmon` or `webanalytics`), never edit a merged migration, `outOfOrder=false`.
   - Every write idempotent (upsert on the natural key or replace-per-window, contract §3.2).
   - Read API: problem+json errors with `code`, `Cache-Control: no-store`, nulls never omitted, `from`/`to` window rules.
-  - Auth: `SCOPE_netmon:read` + `sub` allowlist (v1); no `ROLE_ADMIN` path until furchert-ch#43. `/api/webanalytics/**`: `SCOPE_analytics:write` + `sub` in `webanalytics.api.write-clients` + no `ROLE_*` authority (docs/100 §6.1).
+  - Auth: `SCOPE_netmon:read` + `sub` allowlist (v1); no `ROLE_ADMIN` path until furchert-ch#43. `/api/webanalytics/**`: writes `SCOPE_analytics:write` + `write-clients`, reads `SCOPE_analytics:read` + `read-clients`, both no `ROLE_*` authority (docs/100 §6.1, §8.1).
   - Privacy: IPs are personal data; retention defined, no IPs or tokens in logs or `last_error`.
 - Output: the spec diff (contract + `INTERFACES.md`), open questions, and which consumers (furchert-ch) must follow.
 
@@ -19,8 +19,8 @@ Repo-specific context for the `homelab-workflow` agents; each agent reads only i
 
 - Stack: Java 25, Spring Boot 4.1.2, Spring Security 7 resource server, `JdbcClient` (no JPA), Flyway (history table `public.flyway_schema_history_data`), Micrometer Prometheus, Jackson 3 (`tools.jackson`), Testcontainers `postgres:17-alpine`.
 - Also read the contract sections the plan cites (`docs/060-network-monitoring.md` in the `homelab` repo) and `INTERFACES.md` before coding.
-- Packages under `ch.furchert.homelab.data`: `config/`, `security/`, `web/` (problem+json), `netmon/collector/` (runner, state, metrics), `netmon/retention/`, `netmon/api/`, one package per data set (e.g. `netmon/inbound/`), `webanalytics/ingest/` (write API).
-- Collectors implement `NetmonCollector`, own their `@Scheduled(cron = ..., zone = "UTC")` trigger and call `CollectorRunner.run(this)`. Expected failures throw `CollectorException` with a self-authored message. Kill switch: `netmon.collectors.<name>.enabled`.
+- Packages under `ch.furchert.homelab.data`: `config/`, `security/`, `web/` (problem+json), `netmon/collector/` (runner, state, metrics), `netmon/retention/`, `netmon/api/`, one package per data set (e.g. `netmon/inbound/`), `webanalytics/ingest/` (write API), `webanalytics/rollup/` (rollup collector), `webanalytics/api/` (read API, aggregates only).
+- Collectors implement `NetmonCollector`, own their `@Scheduled(cron = ..., zone = "UTC")` trigger (the web analytics rollup: Europe/Zurich, documented exception) and call `CollectorRunner.run(this)`. Expected failures throw `CollectorException` with a self-authored message. Kill switch: `netmon.collectors.<name>.enabled`.
 - New tables register a `RetentionTarget` bean reading `netmon.retention.<table>-days`.
 - Flyway files `V<n>__<schema>_<topic>.sql`, schema `netmon` or `webanalytics`; next free number at PR time.
 - Errors go through `web/ProblemDetailsAdvice`; never put third-party exception messages into responses or `collector_state.last_error`.
@@ -30,7 +30,7 @@ Repo-specific context for the `homelab-workflow` agents; each agent reads only i
 
 ## reviewer
 
-- [ ] `/api/netmon/**` stays behind `SCOPE_netmon:read` + `sub` in `netmon.api.allowed-clients`; `/api/webanalytics/**` behind `SCOPE_analytics:write` + `sub` in `webanalytics.api.write-clients` + no `ROLE_*`, ending in `denyAll`; no stray `permitAll()`; actuator exposure limited to health/info/prometheus.
+- [ ] `/api/netmon/**` stays behind `SCOPE_netmon:read` + `sub` in `netmon.api.allowed-clients`; `/api/webanalytics/**` writes behind `SCOPE_analytics:write` + `write-clients`, reads behind `SCOPE_analytics:read` + `read-clients`, both no `ROLE_*`, ending in `denyAll`; the web analytics read API reads aggregates only; no stray `permitAll()`; actuator exposure limited to health/info/prometheus.
 - [ ] No tokens, headers, secrets or IPs in logs, `last_error`, problem `detail` or metrics labels.
 - [ ] Flyway: new `V<n>` only, merged migrations untouched, schema objects in `netmon` or `webanalytics`.
 - [ ] Writes idempotent per contract §3.2; truncation before natural-key aggregation.

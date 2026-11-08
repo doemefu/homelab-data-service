@@ -13,15 +13,13 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Collector freshness for the status API. {@code stale} means the last success is older than
- * 3 x the cadence (docs/060 §7.2). Before a collector's first success the service start time is
- * the reference, so a freshly deployed collector is not reported stale before it could have run,
- * but one that never succeeds becomes stale after 3 cadences. Disabled collectors are never stale.
+ * Collector freshness for the status APIs. {@code stale} means the last success is older than
+ * {@link NetmonCollector#staleAfter()} (3 x the cadence by default, docs/060 §7.2). Before a collector's first
+ * success the service start time is the reference, so a freshly deployed collector is not reported stale before it
+ * could have run, but one that never succeeds becomes stale after that age. Disabled collectors are never stale.
  */
 @Service
 public class CollectorStatusService {
-
-    private static final int STALE_CADENCES = 3;
 
     private final List<NetmonCollector> collectors;
     private final CollectorStateRepository repository;
@@ -38,11 +36,18 @@ public class CollectorStatusService {
         this.startedAt = clock.instant();
     }
 
+    /** Statuses of the {@code netmon} group (docs/060 §7.2). */
     public List<CollectorStatus> statuses() {
+        return statuses(NetmonCollector.NETMON_GROUP);
+    }
+
+    /** Statuses of the collectors in one {@link NetmonCollector#group()}. */
+    public List<CollectorStatus> statuses(String group) {
         Instant now = clock.instant();
         Map<String, CollectorState> states = repository.findAll().stream()
                 .collect(Collectors.toMap(CollectorState::collector, Function.identity()));
         return collectors.stream()
+                .filter(collector -> group.equals(collector.group()))
                 .sorted(Comparator.comparing(NetmonCollector::name))
                 .map(collector -> toStatus(collector, states.get(collector.name()), now))
                 .toList();
@@ -53,7 +58,7 @@ public class CollectorStatusService {
         Instant lastSuccess = state == null ? null : state.lastSuccessAt();
         Instant reference = lastSuccess != null ? lastSuccess : startedAt;
         boolean stale = enabled
-                && Duration.between(reference, now).compareTo(collector.cadence().multipliedBy(STALE_CADENCES)) > 0;
+                && Duration.between(reference, now).compareTo(collector.staleAfter()) > 0;
         return new CollectorStatus(
                 collector.name(),
                 enabled,

@@ -45,10 +45,10 @@ class IngestServiceCountingTest {
         TransactionSynchronizationManager.initSynchronization();
         when(repository.existing(anyCollection(), anyCollection())).thenReturn(List.of());
         WebAnalyticsProperties properties = new WebAnalyticsProperties(
-                new WebAnalyticsProperties.Api(List.of("furchert-ch")), ZoneId.of("Europe/Zurich"));
+                new WebAnalyticsProperties.Api(List.of("furchert-ch"), List.of("furchert-ch")), ZoneId.of("Europe/Zurich"));
         service = new IngestService(new EventValidator(), repository,
                 new EnquiryDeduplicator(Clock.fixed(NOW, ZoneOffset.UTC)), new WebAnalyticsMetrics(new SimpleMeterRegistry()),
-                Clock.fixed(NOW, ZoneOffset.UTC), properties);
+                Clock.fixed(NOW, ZoneOffset.UTC), properties, new IngestActivity(Clock.fixed(NOW, ZoneOffset.UTC)));
     }
 
     @AfterEach

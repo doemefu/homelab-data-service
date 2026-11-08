@@ -40,7 +40,8 @@ class WebAnalyticsMigrationIntegrationTest extends AbstractIntegrationTest {
     void schemaHoldsTheThreeWa1Tables() {
         List<String> tables = jdbc.sql("SELECT table_name FROM information_schema.tables WHERE table_schema = 'webanalytics'")
                 .query(String.class).list();
-        assertThat(tables).containsExactlyInAnyOrder("events", "daily_ingest_stats", "daily_enquiries");
+        // WA-3a (V7) adds the aggregate tables; see WebAnalyticsAggregatesMigrationIntegrationTest.
+        assertThat(tables).contains("events", "daily_ingest_stats", "daily_enquiries");
     }
 
     @Test

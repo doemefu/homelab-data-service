@@ -92,6 +92,14 @@ class StatusEndpointIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void webanalyticsCollectorsAreNotPartOfTheNetworkStatus() throws Exception {
+        // docs/100 §7.5: /api/netmon/status lists only the netmon group; webanalytics-rollup is in /api/webanalytics/status.
+        mockMvc.perform(get("/api/netmon/status").header("Authorization", bearer))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("webanalytics"))));
+    }
+
+    @Test
     void unknownApiPath_is404ProblemJson() throws Exception {
         mockMvc.perform(get("/api/netmon/does-not-exist").header("Authorization", bearer))
                 .andExpect(status().isNotFound())
