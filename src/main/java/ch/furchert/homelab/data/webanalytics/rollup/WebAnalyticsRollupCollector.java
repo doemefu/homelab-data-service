@@ -145,7 +145,9 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
     /**
      * The Cloudflare baseline (docs/100 §7.8, rev 3.5), after the analytics days and in separate transactions, so a
      * failure here never aborts the rollup: a one-time backfill while the table is empty, then a replace for every day
-     * rolled in this run. Failures are logged by class name and returned as one warning message (null = none).
+     * rolled in this run. The replaces run only after the backfill completed: otherwise they would fill the empty
+     * table and the next run would never retry the backfill. Failures are logged by class name and returned as one
+     * warning message (null = none).
      */
     String cfBaseline(List<LocalDate> rolled) {
         List<String> problems = new ArrayList<>();
@@ -156,6 +158,9 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         } catch (RuntimeException e) {
             log.warn("[{}] CF baseline backfill failed: {}", NAME, e.getClass().getSimpleName());
             problems.add("CF baseline backfill failed (" + e.getClass().getSimpleName() + ")");
+        }
+        if (!problems.isEmpty()) {
+            return String.join("; ", problems);
         }
         for (LocalDate day : rolled) {
             try {

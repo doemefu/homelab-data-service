@@ -9,6 +9,7 @@ import ch.furchert.homelab.data.webanalytics.rollup.RollupPlanner;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -22,6 +23,7 @@ import java.util.UUID;
 import static ch.furchert.homelab.data.support.RollupEvents.zurich;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 
 /** WA-3b rollup against PostgreSQL (docs/100 §7.5, §7.8, §8.5, rev 3.5): journeys, submits, definition bump, CF baseline. */
 class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTest {
@@ -230,6 +232,26 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
             }
         }
         assertThat(baseline()).isEmpty();
+    }
+
+    @Test
+    void aFailedBackfillSkipsTheDayReplacesSoTheNextRunRetriesIt() {
+        rows.landing(UUID.randomUUID(), zurich("2026-11-08T10:00:00"), "/", null, null); // a day is rolled
+        inbound.page(zurich("2026-11-06T10:00:00"), "/de", 1); // oldest, partial
+        inbound.page(zurich("2026-11-07T10:00:00"), "/de", 2);
+        inbound.page(zurich("2026-11-08T10:00:00"), "/de", 3);
+        doThrow(new DataAccessResourceFailureException("simulated")).doCallRealMethod()
+                .when(rollupRepository).firstNetmonHour();
+        MutableClock clock = clockAt(zurich("2026-11-09T07:30:00"));
+
+        assertThatThrownBy(() -> collector(clock).collect())
+                .isInstanceOf(CollectorWarning.class).hasMessageContaining("CF baseline backfill failed");
+        assertThat(sum("SELECT count(*) FROM webanalytics.rollup_day WHERE day = '2026-11-08'")).isEqualTo(1);
+        assertThat(baseline()).isEmpty();
+
+        clock.advance(Duration.ofMinutes(5));
+        collector(clock).collect();
+        assertThat(baseline()).containsExactly("2026-11-07 / de 2 false", "2026-11-08 / de 3 false");
     }
 
     private long funnel(String id, int step) {
