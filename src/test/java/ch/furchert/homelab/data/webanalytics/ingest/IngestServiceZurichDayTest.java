@@ -106,9 +106,9 @@ class IngestServiceZurichDayTest {
 
     private IngestService service(Instant now, EnquiryDeduplicator dedupe) {
         WebAnalyticsProperties properties = new WebAnalyticsProperties(
-                new WebAnalyticsProperties.Api(List.of("furchert-ch")), ZoneId.of("Europe/Zurich"));
+                new WebAnalyticsProperties.Api(List.of("furchert-ch"), List.of("furchert-ch")), ZoneId.of("Europe/Zurich"));
         return new IngestService(new EventValidator(), repository, dedupe, new WebAnalyticsMetrics(registry),
-                Clock.fixed(now, ZoneOffset.UTC), properties);
+                Clock.fixed(now, ZoneOffset.UTC), properties, new IngestActivity(Clock.fixed(now, ZoneOffset.UTC)));
     }
 
     private static IngestRequest batchOf(Map<String, Object> event) {

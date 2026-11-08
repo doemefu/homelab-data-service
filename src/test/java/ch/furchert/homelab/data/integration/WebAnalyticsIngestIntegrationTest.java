@@ -4,6 +4,7 @@ import ch.furchert.homelab.data.AbstractIntegrationTest;
 import ch.furchert.homelab.data.support.WebAnalyticsFixtures;
 import ch.furchert.homelab.data.support.WebAnalyticsFixtures.Case;
 import ch.furchert.homelab.data.support.WebAnalyticsTables;
+import ch.furchert.homelab.data.webanalytics.ingest.IngestActivity;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,6 +57,8 @@ class WebAnalyticsIngestIntegrationTest extends AbstractIntegrationTest {
     JdbcClient jdbc;
     @Autowired
     MeterRegistry registry;
+    @Autowired
+    IngestActivity activity;
 
     @BeforeEach
     void clean() {
@@ -91,6 +94,17 @@ class WebAnalyticsIngestIntegrationTest extends AbstractIntegrationTest {
                 .containsEntry("viewport", "1024-1439")
                 .containsEntry("source", "furchert-ch");
         assertThat(stats("accepted", "")).isEqualTo(4L);
+    }
+
+    @Test
+    void ingestActivityCountsCapCountedEventsAfterCommit() throws Exception {
+        // docs/100 §8.2: eventsToday counts pageview/engagement/click (goal and enquiry are cap-exempt).
+        Instant now = Instant.now();
+        long before = activity.snapshot().eventsToday();
+        send(batch(List.of(event("pageview", now), event("click", now), event("goal", now), event("enquiry", now))))
+                .andExpect(status().isOk());
+        assertThat(activity.snapshot().eventsToday() - before).isEqualTo(2);
+        assertThat(activity.snapshot().lastEventAt()).isNotNull();
     }
 
     @Test

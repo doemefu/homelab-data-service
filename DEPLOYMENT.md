@@ -199,6 +199,31 @@ WA-1 adds the migration `V6__webanalytics_ingest` (schema `webanalytics`, three 
 | 400 for every batch | furchert-ch serialises a shape that differs from docs/100 §6.2 (missing or extra key, wrong JSON type); compare with `src/test/resources/webanalytics/c13-fixtures.json` |
 | 500 with `[webanalytics] batch write failed: <class>` | Database unavailable, the 2 s statement timeout, or (a bug) a row that passed validation but hit a V6 CHECK; the log names only the exception class |
 
+## WA-3a rollout (#54): rollup and read API
+
+WA-3a adds the migration `V7__webanalytics_core_aggregates` (nine tables, additive), the `webanalytics-rollup` collector **shipped disabled**, and the read API `GET /api/webanalytics/*` (contract `docs/100-web-analytics.md` §7.5-§8.4, rev 3.4). No new env var, Secret key, NetworkPolicy, outbound destination or dependency; the read scope comes from auth-service (`analytics:read`, doemefu/homelab-auth-service#142).
+
+1. **Merge this PR.** Flux rolls out the image; Flyway applies V7. The rollup stays off; no freshness series is exported, so `NetmonCollectorStale` cannot fire.
+2. Verify via port-forward with an `analytics:read` token (read into `$TOKEN` without echoing it): `GET /api/webanalytics/status` → `webanalytics-rollup` `enabled: false`, `lastCompleteDay: null`; `GET /api/webanalytics/overview` → empty range; `GET /api/netmon/status` unchanged (no `webanalytics-*`); `curl -s localhost:8082/actuator/prometheus | grep -c 'collector="webanalytics-rollup"'` → 0. Latency check (Q4 b): time each read endpoint once and record it in the issue.
+3. **Gate N1 (owner):** doemefu/homelab#350 (daily-class alert + catch-all exclusion) merged, then the owner runs playbook `41_monitoring.yml`; the run is recorded as a comment on #350.
+4. **Enable follow-up PR** (separate, only after step 3; its description links the #350 comment): `k8s/deployment.yaml` gains
+
+   ```yaml
+   - name: SPRING_APPLICATION_JSON
+     value: '{"netmon":{"collectors":{"webanalytics-rollup":{"enabled":true}}}}'
+   ```
+
+   (`NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED=true` also binds, but only because `application.yaml` defines the key; both are pinned by `RollupEnableBindingTest`). Any later collector kill switch must join the same JSON object. After rollout: the next 01:12 run writes yesterday with `final = false`, the 07:30 run rewrites it as final; `/api/webanalytics/status.lastCompleteDay` then shows yesterday.
+
+### Troubleshooting (WA-3a)
+
+| Symptom | Likely cause |
+|---|---|
+| `/status`: `webanalytics-rollup` `lastErrorCode=partial` | Another session held the rollup's advisory lock; the run stopped and the next run continues |
+| `/status`: `webanalytics-rollup` `lastErrorCode=internal`, `consecutiveFailures` > 0 | A day failed (statement timeout, database error); the log names only the exception class; the next run retries the same days |
+| `lastCompleteDay` stays the day before yesterday after 07:30 | Spring-forward day (the close moves to 08:15) or the 07:30 run failed; the next 01:12 run finalises it |
+| 403 for the furchert-ch read token | Token requested without `scope=analytics:read`, or a role-bearing user token |
+
 ## Verification (§11 NM-0)
 
 ```bash
@@ -221,6 +246,7 @@ A token without `netmon:read` must get 403.
 - Code: revert the image tag commit in `k8s/deployment.yaml`, or suspend the Flux Kustomization `data-service`.
 - Schema: migrations are forward-only. An older image ignores newer migrations only if they are additive, so never edit or delete a merged migration.
 - WA-1 (V6, docs/100 §12.4): the previous image starts on a V6 database because Flyway ignores applied future migrations (`spring.flyway.ignore-migration-patterns` default `*:future`, not overridden here). Verified in WA-1 phase 1 and pinned by `WebAnalyticsUpgradeIntegrationTest`. Never edit or undo V6; the `webanalytics` schema simply stays. To stop ingest without a data-service change, set `ANALYTICS_COLLECT_ENABLED=false` in furchert-ch (pod delete).
+- WA-3a (V7): additive; the previous image starts on a V7 database (`*:future`). To stop the rollup without a code change, set `webanalytics-rollup` to `false` in the same `SPRING_APPLICATION_JSON` (or remove the enable entry). Aggregates stay; they are rebuilt per day by the next enabled run. WA-3a adds no dependency.
 - Collectors: set `netmon.collectors.<name>.enabled=false` to stop one source without a code change. Collector names contain dashes (for example `cloudflare-requests`), which a plain env var cannot express, so use `SPRING_APPLICATION_JSON` in the deployment:
 
   ```yaml

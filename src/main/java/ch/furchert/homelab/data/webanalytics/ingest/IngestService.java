@@ -49,15 +49,18 @@ public class IngestService {
     private final WebAnalyticsMetrics metrics;
     private final Clock clock;
     private final ZoneId zone;
+    private final IngestActivity activity;
 
     public IngestService(EventValidator validator, WebAnalyticsRepository repository, EnquiryDeduplicator enquiries,
-                         WebAnalyticsMetrics metrics, Clock clock, WebAnalyticsProperties properties) {
+                         WebAnalyticsMetrics metrics, Clock clock, WebAnalyticsProperties properties,
+                         IngestActivity activity) {
         this.validator = validator;
         this.repository = repository;
         this.enquiries = enquiries;
         this.metrics = metrics;
         this.clock = clock;
         this.zone = properties.timezone();
+        this.activity = activity;
     }
 
     private record PageviewSeq(UUID pageviewId, int seq) {
@@ -67,11 +70,13 @@ public class IngestService {
     @Transactional
     public IngestOutcome ingest(IngestRequest request, String source) {
         List<UUID> reservedEnquiries = new ArrayList<>();
-        Map<RejectReason, Integer> rejected = new EnumMap<>(RejectReason.class); // response + metric, enquiries incl.
-        Map<RejectReason, Integer> statsRejected = new EnumMap<>(RejectReason.class); // daily_ingest_stats, no enquiries
+        // Response + metric count every reject (enquiries included); daily_ingest_stats never counts enquiries.
+        Map<RejectReason, Integer> rejected = new EnumMap<>(RejectReason.class);
+        Map<RejectReason, Integer> statsRejected = new EnumMap<>(RejectReason.class);
         Map<String, Integer> edgeDrops = new LinkedHashMap<>(request.edgeDrops().byReason());
         int[] counters = new int[2]; // accepted, duplicates
-        registerCompletion(reservedEnquiries, rejected, edgeDrops, counters);
+        List<ValidEvent> stored = new ArrayList<>();
+        registerCompletion(reservedEnquiries, rejected, edgeDrops, counters, stored);
 
         repository.applyStatementTimeout();
         Instant now = clock.instant();
@@ -116,12 +121,13 @@ public class IngestService {
 
         List<ValidEvent> toInsert = classifyAgainstStored(candidates, batchIds, batchKeys, rejected, statsRejected,
                 counters);
-        int[] stored = repository.insertEvents(toInsert, source);
-        for (int count : stored) {
-            if (count == 0) {
+        int[] insertCounts = repository.insertEvents(toInsert, source);
+        for (int i = 0; i < insertCounts.length; i++) {
+            if (insertCounts[i] == 0) {
                 counters[1]++; // lost a race against a concurrent batch
             } else {
                 counters[0]++;
+                stored.add(toInsert.get(i));
             }
         }
 
@@ -189,12 +195,16 @@ public class IngestService {
      * The arguments are filled while the batch is processed.
      */
     private void registerCompletion(List<UUID> reservedEnquiries, Map<RejectReason, Integer> rejected,
-                                    Map<String, Integer> edgeDrops, int[] counters) {
+                                    Map<String, Integer> edgeDrops, int[] counters, List<ValidEvent> stored) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 metrics.record(new IngestOutcome(counters[0], counters[1], reservedEnquiries.size(),
                         Map.copyOf(rejected), Map.copyOf(edgeDrops)));
+                activity.recordStored(
+                        stored.stream().filter(e -> !EventValidator.GOAL.equals(e.type()))
+                                .map(ValidEvent::receivedAt).toList(),
+                        stored.stream().map(ValidEvent::receivedAt).max(Comparator.naturalOrder()).orElse(null));
             }
 
             @Override

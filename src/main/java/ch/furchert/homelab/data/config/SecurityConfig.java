@@ -35,6 +35,11 @@ public class SecurityConfig {
     static final String NETMON_READ = "SCOPE_netmon:read";
     static final String ANALYTICS_WRITE = "SCOPE_analytics:write";
     static final String WEBANALYTICS_EVENTS = "/api/webanalytics/events";
+    static final String ANALYTICS_READ = "SCOPE_analytics:read";
+    /** The WA-3a read endpoints (docs/100 §8.2); WA-3b adds its own. */
+    static final String[] WEBANALYTICS_READ_PATHS = {"/api/webanalytics/status", "/api/webanalytics/overview",
+            "/api/webanalytics/pages", "/api/webanalytics/pages/detail", "/api/webanalytics/clicks",
+            "/api/webanalytics/sources"};
 
     /**
      * Chain 1: the netmon read API (docs/060 §7.1, §7.5). Stateless JWT resource server; v1 grants
@@ -93,12 +98,12 @@ public class SecurityConfig {
     }
 
     /**
-     * Chain 3: the web analytics write API (docs/100 §6.1). Access requires {@code SCOPE_analytics:write} AND a
-     * {@code sub} in {@code webanalytics.api.write-clients} AND no {@code ROLE_*} authority (defence in depth
-     * against role-bearing user tokens; client-credentials tokens carry no role). {@code POST /events} is the
-     * only endpoint; other methods on {@code /events} still need the write token and then get 405 from MVC.
-     * Everything else under the prefix is denied until later sub-projects add their matchers above the
-     * {@code denyAll}. Headers, problem+json errors, JWKS-failure handling and CSRF as in chain 1.
+     * Chain 3: the web analytics API. Writes (docs/100 §6.1): {@code SCOPE_analytics:write} AND a {@code sub} in
+     * {@code webanalytics.api.write-clients} AND no {@code ROLE_*} authority. Reads (§8.1, rev 3.4):
+     * {@code SCOPE_analytics:read} AND a {@code sub} in {@code webanalytics.api.read-clients} AND no {@code ROLE_*}
+     * authority (defence in depth against role-bearing user tokens; client-credentials tokens carry no role).
+     * Other methods on a known path still need the matching token and then get 405 from MVC. Everything else under
+     * the prefix is denied. Headers, problem+json errors, JWKS-failure handling and CSRF as in chain 1.
      */
     @Bean
     @Order(3)
@@ -107,6 +112,10 @@ public class SecurityConfig {
         AuthorizationManager<RequestAuthorizationContext> writeAccess = AuthorizationManagers.allOf(
                 AuthorityAuthorizationManager.hasAuthority(ANALYTICS_WRITE),
                 new AllowedClientAuthorizationManager(properties.api().writeClients()),
+                new NoUserRoleAuthorizationManager());
+        AuthorizationManager<RequestAuthorizationContext> readAccess = AuthorizationManagers.allOf(
+                AuthorityAuthorizationManager.hasAuthority(ANALYTICS_READ),
+                new AllowedClientAuthorizationManager(properties.api().readClients()),
                 new NoUserRoleAuthorizationManager());
         ProblemJsonAuthenticationEntryPoint entryPoint = new ProblemJsonAuthenticationEntryPoint(jsonMapper);
         ProblemJsonAccessDeniedHandler accessDeniedHandler = new ProblemJsonAccessDeniedHandler(jsonMapper,
@@ -117,6 +126,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, WEBANALYTICS_EVENTS).access(writeAccess)
                         .requestMatchers(WEBANALYTICS_EVENTS).access(writeAccess)
+                        .requestMatchers(HttpMethod.GET, WEBANALYTICS_READ_PATHS).access(readAccess)
+                        .requestMatchers(WEBANALYTICS_READ_PATHS).access(readAccess)
                         .anyRequest().denyAll())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .oauth2ResourceServer(rs -> rs

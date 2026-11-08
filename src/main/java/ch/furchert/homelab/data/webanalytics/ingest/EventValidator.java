@@ -213,7 +213,8 @@ public class EventValidator {
         };
     }
 
-    static boolean isCanonicalPath(String path) {
+    /** The locale-free canonical path rule (docs/100 §6.2), shared with the read API's {@code path} parameter. */
+    public static boolean isCanonicalPath(String path) {
         return path != null && path.length() <= MAX_PATH_LENGTH && PATH.matcher(path).matches();
     }
 

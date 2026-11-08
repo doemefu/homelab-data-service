@@ -1,12 +1,14 @@
 package ch.furchert.homelab.data.netmon.api;
 
 import ch.furchert.homelab.data.netmon.collector.CollectorStatusService;
+import ch.furchert.homelab.data.netmon.collector.NetmonCollector;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Collector freshness for the UI's honest-fallback banner (docs/060 §7.2). Authorization and the
+ * Collector freshness for the UI's honest-fallback banner (docs/060 §7.2). Only the {@code netmon} group; the
+ * web analytics collectors appear in {@code /api/webanalytics/status} (docs/100 §7.5). Authorization and the
  * no-store caching headers are applied by the {@code /api/netmon/**} security chain.
  */
 @RestController
@@ -21,6 +23,6 @@ public class StatusController {
 
     @GetMapping("/status")
     public StatusResponse status() {
-        return new StatusResponse(statusService.statuses());
+        return new StatusResponse(statusService.statuses(NetmonCollector.NETMON_GROUP));
     }
 }

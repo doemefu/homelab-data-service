@@ -48,6 +48,10 @@ public class WebAnalyticsRepository {
             ON CONFLICT (day) DO UPDATE SET submissions = webanalytics.daily_enquiries.submissions + EXCLUDED.submissions
             """;
 
+    /** Startup seed of {@link IngestActivity}: stored cap-counted events since {@code dayStart}, newest receipt. */
+    public record Activity(long capCountedToday, Instant newestReceivedAt) {
+    }
+
     /** An existing row's keys. */
     public record StoredKey(UUID eventId, UUID pageviewId, Integer seq) {
     }
@@ -66,6 +70,20 @@ public class WebAnalyticsRepository {
 
     public WebAnalyticsRepository(NamedParameterJdbcTemplate named) {
         this.named = named;
+    }
+
+    /** Seed values for {@link IngestActivity} (docs/100 §8.2); runs once at startup, never on a read request. */
+    public Activity activity(Instant dayStart) {
+        return named.queryForObject("""
+                        SELECT count(*) FILTER (WHERE event_type IN ('pageview', 'engagement', 'click')
+                                                  AND received_at >= :dayStart) AS today,
+                               max(received_at) AS newest
+                        FROM webanalytics.events
+                        """,
+                new MapSqlParameterSource("dayStart", utc(dayStart)), (rs, i) -> {
+                    OffsetDateTime newest = rs.getObject("newest", OffsetDateTime.class);
+                    return new Activity(rs.getLong("today"), newest == null ? null : newest.toInstant());
+                });
     }
 
     /** Applies the batch's 2 s statement timeout (docs/100 §6.2) to the current transaction. */

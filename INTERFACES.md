@@ -203,7 +203,7 @@ Form-login outcomes from auth-service (`login_events`, `occurred_at` in `[from, 
 
 ## 1b. Exposed: web analytics write API (WA-1)
 
-Contract: `docs/100-web-analytics.md` §6.1 to §6.3, §7.2, §7.9 (Epic doemefu/homelab#348, issue #53). Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:8082/api/webanalytics`. The only caller is furchert-ch's server-side forward queue. Deferred to WA-5 (#56): caps and 429, `DELETE /visitors/{id}` with tombstones, retention of `events`, the capped/today/table-bytes gauges. The read API follows in WA-3a.
+Contract: `docs/100-web-analytics.md` §6.1 to §6.3, §7.2, §7.9 (Epic doemefu/homelab#348, issue #53). Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:8082/api/webanalytics`. The only caller is furchert-ch's server-side forward queue. Deferred to WA-5 (#56): caps and 429, `DELETE /visitors/{id}` with tombstones, retention of `events`, the capped/today/table-bytes gauges. The read API is section 1c.
 
 ### Authentication and authorization (§6.1)
 
@@ -257,6 +257,46 @@ data-service checks the patterns of furchert-ch's registries (`TRACKED_PATHS`, `
 
 **Accepted residuals:** a batch that failed with 5xx and is retried reports its `edgeDrops` again unless furchert-ch zeroes them on retry (spec §6.2); two concurrent batches that reuse the same `(pageviewId, seq)` with different ids can classify the loser as a duplicate instead of `other`.
 
+## 1c. Exposed: web analytics read API and rollup (WA-3a)
+
+Contract: `docs/100-web-analytics.md` §7.5, §7.6, §7.8, §8.1-§8.4 (rev 3.4; issue #54). Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:8082/api/webanalytics`. The only caller is furchert-ch's `/dashboard/analytics` (WA-4a).
+
+### Authentication and authorization (§8.1)
+
+- `GET` only. Access requires scope `analytics:read` **and** a `sub` in `webanalytics.api.read-clients` (default `[furchert-ch]`) **and** no `ROLE_*` authority (defence in depth, as for writes). A write token, a `netmon:read` token or a role-bearing user token gets 403; other methods on a read path get 405; anonymous 401. Every response carries `Cache-Control: no-store` and `Pragma: no-cache`.
+- Token request: `grant_type=client_credentials&scope=analytics:read` (one token per scope).
+
+### Common rules (§8.1, rev 3.4)
+
+| Item | Behaviour |
+|---|---|
+| Source | Aggregates only (`rollup_day`, the eight WA-3a tables, `daily_enquiries`); never `webanalytics.events` (source-scan test). Every aggregate query joins `rollup_day` on `final`, so a provisional day is never served, also an old one below `lastCompleteDay` |
+| Range | `from`, `to` = Zurich dates (`YYYY-MM-DD`, inclusive); default `to` = `lastCompleteDay`, `from` = `to` − 27 d; `to` clamped to `lastCompleteDay`; span ≤ 366 d; malformed, `from > to` or too long → 400 `invalid_window`; `to < from` after clamping → 200 with an empty range |
+| `range` object | `{"from", "to", "days", "lastCompleteDay", "previous": {"from", "to"} \| null}`; before the first final day (or when nothing is left after clamping) `from`/`to`/`previous` are `null`, `days` 0, lists empty, counts 0 |
+| Compare | `compare=previous` (default; the same number of days immediately before, or the previous calendar month when the range is a whole month) or `none` (`range.previous` and `previous` `null`) |
+| Filters | `locale=de\|en` (entry locale), `device=desktop\|mobile\|tablet`; other values → 400 `invalid_parameter`; echoed as `"filters": {"applied": {…}, "ignored": [...]}` (`/status` ignores both) |
+| Lists | `limit` default 20, 1-100 (else 400 `invalid_parameter`); the remainder is one `(other)` item, merged with stored `(other)` rows |
+| Numbers | Counts only; rates, intervals and medians are computed by furchert-ch |
+
+### Endpoints (§8.2)
+
+| Endpoint | Content |
+|---|---|
+| `GET /status` | `collectors` (only `webanalytics-*`; `stale` after 26 h), `lastCompleteDay` (newest final day), `provisionalDay` (newest non-final day newer than it), `rawRetentionStart: null`, `definitionVersion: 1`, `ingest {lastEventAt, eventsToday, dailyCap: null, capped: null}` from memory (`eventsToday` = stored pageview/engagement/click events with `received_at` in the current UTC day) |
+| `GET /overview` | `current`/`previous` visit counts plus `enquiriesTotal` (ignores filters), zero-filled `daily` series, `visitors` only without filters and for exactly 7 days (`7d`), 28 days (`28d`) or a whole calendar month (`month`), else `null` |
+| `GET /pages` | Items per path with pageviews by page locale, visits viewed, entries, exits, landing engaged/converting visits, engagement samples, engaged-ms sum, 8-bucket histogram, scroll samples and reach |
+| `GET /pages/detail?path=` | `path` required (locale-free canonical path, else 400); `summary`, `previous`/`next` `null` (WA-3b), `clicks`, `sections` and `faqOpens` only for `/automation` (else `null`), zero-filled `daily` |
+| `GET /clicks?kind=` | `kind` optional (one of the eight click kinds); items with `target` (`null` for mailto/tel), `path`, `area`, `clicks`, `visits`, `convertingVisits`, `pageVisits` (visits viewing the path in the same range and filters) |
+| `GET /sources` | All seven channels (zero-filled), referrers, campaigns, converters by landing channel, first-known channel (`null` when unknown) and entry path |
+
+### Rollup collector `webanalytics-rollup` (§7.5, §7.6)
+
+- Runs at **01:12** and **07:30 Europe/Zurich** (documented exception to UTC crons) through the shared collector runner, so the two runs never overlap. **Ships disabled** (`netmon.collectors.webanalytics-rollup.enabled: false`, gate N1); it is listed in `/api/webanalytics/status`, never in `/api/netmon/status`.
+- Each run plans its days from the clock and `rollup_day`: days missing since the first rolled day (oldest first, ≤ 31), closed days still provisional (≤ 31), and days with an outdated definition within 30 days (≤ 31); without any rolled day only yesterday. A day D closes at D + 1 07:15 Zurich (elapsed time: 06:15 on fall-back, 08:15 on spring-forward days); a rollup before the close writes `final = false`. Normally the 01:12 run writes yesterday provisional and the 07:30 run rewrites it final; on a spring-forward day the next 01:12 run finalises it.
+- Per day one transaction: `pg_try_advisory_xact_lock(hashtext('webanalytics-rollup'))` (held elsewhere → the run stops with warning `partial`), `work_mem` 16 MB, `statement_timeout` 120 s, delete the day from every rollup table, batch insert, `rollup_day` (also for empty days), mark. `collector_state.last_window_end` = start of the day after the newest day of the all-final run from the first rolled day (display only). A failing day aborts the run (`internal`).
+- Visit model: visits split at a gap > 30 min between pageviews/goals, at a landing with referrer or UTM, and after 6 h (continuous activity beyond 6 h is cut; accepted data-quality limit); engagement/click events of a known pageview join its visit regardless of the gap; same-path pageviews ≤ 30 s apart merge (engaged time = MAX per original pageview, summed); visits without a pageview are orphans; > 100 pageview events or > 500 events → excluded (counted only in `excluded_visits`). Engaged visit = ≥ 10 s, or ≥ 2 distinct pages, or a key event (`cta`/`mailto`/`tel` click, `/contact` pageview, form start, goal). Visitor figures (daily, 7/28-day, monthly) count distinct visitors of included visits starting in the window; a visitor is new on a day when one of its visits that day is new. Open dimensions keep the day's top 50 by visits and fold the rest into `(other)`.
+- Spec deviation (noted for rev 3.4): rows are computed in Java and batch-inserted instead of `INSERT … SELECT`; same write mode (delete + insert per day, one transaction).
+
 ## 2. Exposed: actuator
 
 | Path | Access | Purpose |
@@ -277,7 +317,7 @@ data-service checks the patterns of furchert-ch's registries (`TRACKED_PATHS`, `
 | `webanalytics_events_rejected_total` | counter | `reason` (`shape`, `enum`, `range`, `time`, `path`, `other`) | Events rejected by the second-line validation, enquiries included |
 | `webanalytics_edge_dropped_total` | counter | `reason` (the nine `edgeDrops` keys) | Events furchert-ch dropped before forwarding, as reported per batch |
 
-The `webanalytics_*` counters are recorded after the batch's transaction commits and are exported with 0 from startup.
+The `webanalytics_*` counters are recorded after the batch's transaction commits and are exported with 0 from startup. The rollup's `netmon_collector_last_success_timestamp_seconds{collector="webanalytics-rollup"}` series exists only while the collector is enabled (gate N1); both daily runs update it.
 
 The `NetmonCollectorStale` rule is owned by the infra repo (doemefu/homelab#116, PR #131). It treats a NaN sample as "never succeeded" once the pod (`kube_pod_start_time`) is older than the collector's threshold. The thresholds are 26 h for `blocklists`/`retention`, 3 h for `egress`, 90 min for `lan`/`reputation`, and 15 min for every other collector (the 5-minute collectors `cloudflare-requests`/`cloudflare-firewall` and the 1-minute `login-events`). Because unconfigured collectors export no series, the rule never fires for a collector that is off on purpose.
 
@@ -316,6 +356,8 @@ The four destinations on the internet (Cloudflare, Spamhaus, GitHub, AbuseIPDB) 
 | `webanalytics.events` | data-service | V6. Accepted pageview, engagement, click and goal events with the pseudonymous `visitor_id` (never leaves data-service); `INSERT … ON CONFLICT DO NOTHING` on `event_id` and `(pageview_id, seq)`; shape, vocabulary, range and time CHECKs. No retention yet (WA-5: 396 d). |
 | `webanalytics.daily_ingest_stats` | data-service | V6. Id-free counts per Zurich day, `stage` and `reason`; upsert-increment at ingest; never touched by the rollup, no retention. |
 | `webanalytics.daily_enquiries` | data-service | V6. Id-free count of successful contact submissions per Zurich day; increment-only, no retention. |
+| `webanalytics.rollup_day` | data-service | V7. One row per rolled-up day: raw events/pageviews of the Zurich day, visits, orphan visits, `definition_version`, `final`, `rolled_up_at` |
+| `webanalytics.daily_visits`, `daily_visitors`, `monthly_visitors`, `daily_page`, `daily_section`, `daily_click`, `daily_source`, `daily_conversion` | data-service | V7. Id-free aggregates (no uuid or visitor/visit id column), keyed by entry locale and device class where visit-scoped; replaced per day by the rollup; no retention |
 | `public.flyway_schema_history_data` | data-service | Flyway history |
 
 No other service reads or writes this database.
@@ -364,6 +406,8 @@ No other service reads or writes this database.
 | `netmon.egress.pod-cidr` / `service-cidr` / `lan-cidr` | `10.42.0.0/16` / `10.43.0.0/16` / `192.168.1.0/24` | Destination scope `pod` / `service` / `lan`; loopback is `loopback`, everything else `external` |
 | `netmon.scheduling.enabled` | `true` | Turns every `@Scheduled` trigger off (the test suite sets `false`) |
 | `webanalytics.api.write-clients` | `[furchert-ch]` | Token `sub` values allowed on `POST /api/webanalytics/events`; empty admits nobody |
+| `webanalytics.api.read-clients` | `[furchert-ch]` | Token `sub` values allowed on `GET /api/webanalytics/*`; empty admits nobody |
+| `netmon.collectors.webanalytics-rollup.enabled` | `false` (set explicitly in `application.yaml`) | Rollup kill switch; enabled only after gate N1 (DEPLOYMENT.md "WA-3a rollout") |
 | `webanalytics.timezone` | `Europe/Zurich` | Day boundary of `daily_ingest_stats` and `daily_enquiries` |
 
 Kubernetes Secret `data-service-secrets` (ns `apps`, created by the `homelab` repo's playbook 59): keys `db-username`, `db-password`; NM-1 reads `cloudflare-api-token` → `CLOUDFLARE_API_TOKEN`, `cloudflare-zone-id` → `CLOUDFLARE_ZONE_ID` (both added by doemefu/homelab#116) and `abuseipdb-api-key` → `ABUSEIPDB_API_KEY` (optional; set via playbook 59, doemefu/homelab#146; the reputation collector is disabled while the key is absent). All three `secretKeyRef`s are `optional: true`. NM-4 adds `auth-client-secret` (§9).
