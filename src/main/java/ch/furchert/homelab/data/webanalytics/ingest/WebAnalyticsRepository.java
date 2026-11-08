@@ -39,13 +39,15 @@ public class WebAnalyticsRepository {
     private static final String INCREMENT_STATS = """
             INSERT INTO webanalytics.daily_ingest_stats (day, stage, reason, events)
             VALUES (:day, :stage, :reason, :events)
-            ON CONFLICT (day, stage, reason) DO UPDATE SET events = webanalytics.daily_ingest_stats.events + EXCLUDED.events
+            ON CONFLICT (day, stage, reason)
+                DO UPDATE SET events = webanalytics.daily_ingest_stats.events + EXCLUDED.events
             """;
 
     private static final String INCREMENT_ENQUIRIES = """
             INSERT INTO webanalytics.daily_enquiries (day, submissions)
             VALUES (:day, :submissions)
-            ON CONFLICT (day) DO UPDATE SET submissions = webanalytics.daily_enquiries.submissions + EXCLUDED.submissions
+            ON CONFLICT (day)
+                DO UPDATE SET submissions = webanalytics.daily_enquiries.submissions + EXCLUDED.submissions
             """;
 
     /** Startup seed of {@link IngestActivity}: stored cap-counted events since {@code dayStart}, newest receipt. */

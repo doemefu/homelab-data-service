@@ -32,8 +32,8 @@ import java.util.UUID;
  * {@code eventId}; a {@code (pageviewId, seq)} already taken by another id is rejected ({@code other}). Enquiries
  * only increment {@code daily_enquiries} (Zurich day of {@code occurredAt}) behind the in-memory 2 h dedupe and
  * never appear in {@code accepted}/{@code duplicates}; an invalid enquiry counts as rejected in the response and
- * the metric, but never in {@code daily_ingest_stats}. Metrics are recorded after commit and enquiry reservations are released
- * on rollback, so a retried 500 neither double-counts nor loses anything.
+ * the metric, but never in {@code daily_ingest_stats}. Metrics are recorded after commit and enquiry reservations
+ * are released on rollback, so a retried 500 neither double-counts nor loses anything.
  */
 @Service
 public class IngestService {
