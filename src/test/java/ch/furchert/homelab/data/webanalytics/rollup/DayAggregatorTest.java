@@ -114,6 +114,43 @@ class DayAggregatorTest {
         assertThat(rows.pages()).isEmpty();
     }
 
+    @Test
+    void transitionsFromEntranceAndToExitEachSumToTheVisits() {
+        List<VisitFacts> visits = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            UUID v = UUID.randomUUID();
+            List<RawEvent> events = new ArrayList<>(List.of(pageview(v, UUID.randomUUID(), t0, "/")));
+            for (int p = 0; p < i; p++) {
+                events.add(pageview(v, UUID.randomUUID(), t0.plusSeconds(60L * (p + 1)), p % 2 == 0 ? "/it" : "/"));
+            }
+            visits.add(facts(VisitBuilder.build(events).getFirst()));
+        }
+        DayRows rows = DayAggregator.aggregate(visits, List.of());
+        assertThat(rows.transitions().stream().filter(t -> t.fromPath().equals("(entrance)"))
+                .mapToInt(RollupRows.TransitionRow::transitions).sum()).isEqualTo(3);
+        assertThat(rows.transitions().stream().filter(t -> t.toPath().equals("(exit)"))
+                .mapToInt(RollupRows.TransitionRow::transitions).sum()).isEqualTo(3);
+        assertThat(rows.funnels()).filteredOn(f -> f.funnelId().equals("offer") && f.step() == 1).singleElement()
+                .satisfies(f -> assertThat(f.visits()).isEqualTo(3));
+        assertThat(rows.entryExits().stream().mapToInt(RollupRows.EntryExitRow::visits).sum()).isEqualTo(3);
+        assertThat(rows.groupPaths().stream().mapToInt(RollupRows.GroupPathRow::visits).sum()).isEqualTo(3);
+    }
+
+    @Test
+    void dimensionsCountVisitsAndEngagedVisitsWithEmptyForMissingValues() {
+        UUID v = UUID.randomUUID();
+        RawEvent pv = new RawEvent(UUID.randomUUID(), RawEvent.PAGEVIEW, t0, v, UUID.randomUUID(), 0, "/", "de", true,
+                null, null, null, null, "mobile", null, null, null, null, null, null, null, null, null, "safari",
+                "ios", "<480");
+        DayRows rows = DayAggregator.aggregate(List.of(new VisitFacts(VisitBuilder.build(List.of(pv)).getFirst(),
+                false, "direct", "")), List.of());
+        // A single landing pageview without engagement: not engaged.
+        assertThat(rows.dimensions()).extracting(d -> d.dimension() + "=" + d.value() + ":" + d.visits() + "/"
+                        + d.engagedVisits())
+                .containsExactly("country=:1/0", "browser_family=safari:1/0", "os_family=ios:1/0", "viewport=<480:1/0",
+                        "visitor_type=returning:1/0");
+    }
+
     private static VisitFacts facts(Visit visit) {
         return new VisitFacts(visit, true, Channels.classify(visit.firstPageview()), "");
     }

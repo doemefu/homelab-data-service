@@ -59,6 +59,8 @@ class WebAnalyticsIngestIntegrationTest extends AbstractIntegrationTest {
     MeterRegistry registry;
     @Autowired
     IngestActivity activity;
+    @Autowired
+    ch.furchert.homelab.data.webanalytics.ingest.WebAnalyticsRepository repository;
 
     @BeforeEach
     void clean() {
@@ -105,6 +107,20 @@ class WebAnalyticsIngestIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(status().isOk());
         assertThat(activity.snapshot().eventsToday() - before).isEqualTo(2);
         assertThat(activity.snapshot().lastEventAt()).isNotNull();
+    }
+
+    @Test
+    void activitySeedCountsTodaysCapCountedEventsAndTheNewestReceipt() {
+        // Follow-up of #59: two bounded queries (received_at >= dayStart, max(received_at)) give the seed values.
+        Instant dayStart = LocalDate.now(java.time.ZoneOffset.UTC).atStartOfDay(java.time.ZoneOffset.UTC).toInstant();
+        ch.furchert.homelab.data.support.RawEventRows raw = new ch.furchert.homelab.data.support.RawEventRows(jdbc);
+        UUID visitor = UUID.randomUUID();
+        raw.pageview(visitor, dayStart.minusSeconds(3600), "/");
+        raw.pageview(visitor, dayStart.plusSeconds(60), "/it");
+        raw.goal(visitor, dayStart.plusSeconds(120));
+        var seed = repository.activity(dayStart);
+        assertThat(seed.capCountedToday()).isEqualTo(1);
+        assertThat(seed.newestReceivedAt()).isEqualTo(dayStart.plusSeconds(120));
     }
 
     @Test

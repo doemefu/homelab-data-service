@@ -16,7 +16,7 @@ public record Visit(
         RawEvent firstPageview,
         List<PageSlot> slots,
         List<RawEvent> clicks,
-        int goals,
+        List<Instant> goalTimes,
         int pageviewEvents,
         int events) {
 
@@ -79,8 +79,12 @@ public record Visit(
         return slots.stream().anyMatch(PageSlot::formStarted);
     }
 
+    public int goals() {
+        return goalTimes.size();
+    }
+
     public boolean converting() {
-        return goals > 0;
+        return !goalTimes.isEmpty();
     }
 
     /** A {@code cta} click, a contact-intent event, a form start or a goal (docs/100 §8.3, rev 3.4). */

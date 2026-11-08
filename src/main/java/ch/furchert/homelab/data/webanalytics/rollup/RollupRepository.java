@@ -4,6 +4,12 @@ import ch.furchert.homelab.data.webanalytics.rollup.RollupPlanner.RolledDay;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.ClickRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.ConversionRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.DayRows;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.DimensionRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.EntryExitRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.FunnelRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.GroupPathRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.IntentSeenRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.TransitionRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.MonthlyRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.PageRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.RollupDayRow;
@@ -26,9 +32,11 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -41,8 +49,31 @@ import java.util.function.Function;
 public class RollupRepository {
 
     static final int FETCH_SIZE = 1_000;
+    /** Tables replaced per day from raw events (the CF baseline is written separately, see {@link #replaceCfBaseline}). */
     static final List<String> DAY_TABLES = List.of("daily_visits", "daily_visitors", "daily_page", "daily_section",
-            "daily_click", "daily_source", "daily_conversion", "rollup_day");
+            "daily_click", "daily_source", "daily_conversion", "daily_transition", "daily_funnel", "daily_group_path",
+            "daily_entry_exit", "daily_intent_seen", "daily_dimension", "daily_submits", "rollup_day");
+
+    /**
+     * Cloudflare GET 2xx requests to page paths per Zurich day (docs/100 §7.8, rev 3.5): the {@code /de|/en} prefix
+     * becomes the page locale, the rest (without a trailing slash, {@code ''} → {@code /}) the locale-free path; the
+     * first segments {@code dashboard}, {@code imprint}, {@code privacy} are not tracked pages and are excluded.
+     * Grouped by the normalised expressions, so {@code /de} and {@code /de/} are one row. Never reads {@code client_ip}.
+     */
+    private static final String CF_BASELINE_SELECT = """
+            SELECT (g.window_start AT TIME ZONE :zone)::date AS day, n.path, n.locale,
+                   sum(g.request_count)::bigint AS requests, bool_or(g.sampled) AS sampled
+            FROM netmon.inbound_request_groups g
+            CROSS JOIN LATERAL (
+                SELECT substring(g.path FROM '^/(de|en)') AS locale,
+                       coalesce(nullif(rtrim(substring(g.path FROM '^/(?:de|en)(/.*)?$'), '/'), ''), '/') AS path
+            ) n
+            WHERE g.host = 'furchert.ch' AND g.method = 'GET' AND g.status BETWEEN 200 AND 299
+              AND g.path ~ '^/(de|en)(/[a-z0-9][a-z0-9-]{0,63}){0,2}/?$'
+              AND g.path !~ '^/(de|en)/(dashboard|imprint|privacy)(/|$)'
+              AND g.window_start >= :from AND g.window_start < :to
+            GROUP BY 1, n.path, n.locale
+            """;
 
     private static final String WINDOW_VISITORS = """
             SELECT DISTINCT w.visitor_id FROM webanalytics.events w
@@ -84,7 +115,8 @@ public class RollupRepository {
         streaming.query("""
                         SELECT event_id, event_type, occurred_at, visitor_id, pageview_id, seq, path, locale, landing,
                                referrer_domain, utm_source, utm_medium, utm_campaign, device_class, engaged_ms,
-                               scroll_max, fits, section_mask, form_started, click_kind, click_target, click_area
+                               scroll_max, fits, section_mask, form_started, click_kind, click_target, click_area,
+                               country, browser_family, os_family, viewport
                         FROM webanalytics.events
                         WHERE occurred_at >= :from AND occurred_at < :to
                         ORDER BY visitor_id, occurred_at, event_id
@@ -95,18 +127,21 @@ public class RollupRepository {
         return events;
     }
 
-    /** Window visitors that have an event before {@code from}: these visitors' visits can never be new. */
-    public Map<UUID, Instant> earliestBefore(Instant from, Instant to) {
-        Map<UUID, Instant> earliest = new HashMap<>();
+    /**
+     * Window visitors that have any event before {@code from}: these visitors' visits can never be new. {@code EXISTS}
+     * semi-join (docs/100 §7.5), so each visitor stops at its first earlier event.
+     */
+    public Set<UUID> visitorsSeenBefore(Instant from, Instant to) {
+        Set<UUID> seen = new HashSet<>();
         named.query("""
-                        SELECT e.visitor_id, min(e.occurred_at) AS first_at FROM webanalytics.events e
-                        WHERE e.occurred_at < :from AND e.visitor_id IN (%s)
-                        GROUP BY e.visitor_id
+                        SELECT w.visitor_id FROM (%s) w
+                        WHERE EXISTS (SELECT 1 FROM webanalytics.events e
+                                      WHERE e.visitor_id = w.visitor_id AND e.occurred_at < :from)
                         """.formatted(WINDOW_VISITORS),
                 window(from, to), rs -> {
-                    earliest.put(rs.getObject("visitor_id", UUID.class), instant(rs, "first_at"));
+                    seen.add(rs.getObject("visitor_id", UUID.class));
                 });
-        return earliest;
+        return seen;
     }
 
     /**
@@ -119,7 +154,8 @@ public class RollupRepository {
                         SELECT DISTINCT ON (e.visitor_id) e.event_id, e.event_type, e.occurred_at, e.visitor_id,
                                e.pageview_id, e.seq, e.path, e.locale, e.landing, e.referrer_domain, e.utm_source,
                                e.utm_medium, e.utm_campaign, e.device_class, e.engaged_ms, e.scroll_max, e.fits,
-                               e.section_mask, e.form_started, e.click_kind, e.click_target, e.click_area
+                               e.section_mask, e.form_started, e.click_kind, e.click_target, e.click_area,
+                               e.country, e.browser_family, e.os_family, e.viewport
                         FROM webanalytics.events e
                         WHERE e.event_type = 'pageview' AND e.landing AND e.occurred_at < :to
                           AND e.visitor_id IN (%s)
@@ -142,7 +178,8 @@ public class RollupRepository {
     }
 
     /** Deletes the day from every rollup-owned table, then inserts the new rows (one transaction, the caller's). */
-    public void replaceDay(LocalDate day, DayRows rows, VisitorsRow visitors, RollupDayRow rollupDay) {
+    public void replaceDay(LocalDate day, Instant dayStart, Instant dayEnd, DayRows rows, VisitorsRow visitors,
+                           RollupDayRow rollupDay) {
         MapSqlParameterSource dayParam = new MapSqlParameterSource("day", day);
         for (String table : DAY_TABLES) {
             named.update("DELETE FROM webanalytics." + table + " WHERE day = :day", dayParam);
@@ -237,6 +274,46 @@ public class RollupRepository {
                 .addValue("entryPath", r.entryPath()).addValue("channel", r.channel())
                 .addValue("firstChannel", r.firstChannel()).addValue("converting", r.convertingVisits())
                 .addValue("conversions", r.conversions()));
+        batch("""
+                INSERT INTO webanalytics.daily_transition (day, entry_locale, device_class, from_path, to_path, transitions)
+                VALUES (:day, :locale, :device, :from, :to, :n)
+                """, rows.transitions(), (TransitionRow r) -> new MapSqlParameterSource("day", day)
+                .addValue("locale", r.entryLocale()).addValue("device", r.deviceClass())
+                .addValue("from", r.fromPath()).addValue("to", r.toPath()).addValue("n", r.transitions()));
+        batch("""
+                INSERT INTO webanalytics.daily_funnel (day, funnel_id, step, entry_locale, device_class, visits)
+                VALUES (:day, :funnel, :step, :locale, :device, :visits)
+                """, rows.funnels(), (FunnelRow r) -> new MapSqlParameterSource("day", day)
+                .addValue("funnel", r.funnelId()).addValue("step", r.step()).addValue("locale", r.entryLocale())
+                .addValue("device", r.deviceClass()).addValue("visits", r.visits()));
+        batch("""
+                INSERT INTO webanalytics.daily_group_path (day, path_key, visits, converting_visits)
+                VALUES (:day, :key, :visits, :converting)
+                """, rows.groupPaths(), (GroupPathRow r) -> new MapSqlParameterSource("day", day)
+                .addValue("key", r.pathKey()).addValue("visits", r.visits())
+                .addValue("converting", r.convertingVisits()));
+        batch("""
+                INSERT INTO webanalytics.daily_entry_exit (day, entry_path, exit_path, visits)
+                VALUES (:day, :entry, :exit, :visits)
+                """, rows.entryExits(), (EntryExitRow r) -> new MapSqlParameterSource("day", day)
+                .addValue("entry", r.entryPath()).addValue("exit", r.exitPath()).addValue("visits", r.visits()));
+        batch("""
+                INSERT INTO webanalytics.daily_intent_seen (day, seen, visits) VALUES (:day, :seen, :visits)
+                """, rows.intentSeen(), (IntentSeenRow r) -> new MapSqlParameterSource("day", day)
+                .addValue("seen", r.seen()).addValue("visits", r.visits()));
+        batch("""
+                INSERT INTO webanalytics.daily_dimension (day, dimension, value, visits, engaged_visits)
+                VALUES (:day, :dimension, :value, :visits, :engaged)
+                """, rows.dimensions(), (DimensionRow r) -> new MapSqlParameterSource("day", day)
+                .addValue("dimension", r.dimension()).addValue("value", r.value()).addValue("visits", r.visits())
+                .addValue("engaged", r.engagedVisits()));
+        // Goals by submission day, excluded and orphan visits included (matches daily_enquiries, docs/100 §7.8).
+        named.update("""
+                        INSERT INTO webanalytics.daily_submits (day, consented_submits)
+                        SELECT :day, count(*) FROM webanalytics.events
+                        WHERE event_type = 'goal' AND occurred_at >= :from AND occurred_at < :to
+                        """,
+                window(dayStart, dayEnd).addValue("day", day));
         named.update("""
                         INSERT INTO webanalytics.rollup_day (day, raw_events, raw_pageviews, visits, orphan_visits,
                             definition_version, final, rolled_up_at)
@@ -247,6 +324,49 @@ public class RollupRepository {
                         .addValue("orphan", rollupDay.orphanVisits())
                         .addValue("version", rollupDay.definitionVersion()).addValue("final", rollupDay.fin())
                         .addValue("at", utc(rollupDay.rolledUpAt())));
+    }
+
+    /** Whether {@code daily_cf_baseline} holds no row at all (the one-time backfill condition). */
+    public boolean cfBaselineEmpty() {
+        return Boolean.FALSE.equals(named.getJdbcTemplate().queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM webanalytics.daily_cf_baseline)", Boolean.class));
+    }
+
+    /** First {@code window_start} netmon still holds, or null. */
+    public Instant firstNetmonHour() {
+        return named.getJdbcTemplate().query("SELECT min(window_start) FROM netmon.inbound_request_groups",
+                rs -> {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    OffsetDateTime value = rs.getObject(1, OffsetDateTime.class);
+                    return value == null ? null : value.toInstant();
+                });
+    }
+
+    /** Whether {@code daily_cf_baseline} has rows for the day. */
+    public boolean cfBaselineHasDay(LocalDate day) {
+        return Boolean.TRUE.equals(named.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM webanalytics.daily_cf_baseline WHERE day = :day)",
+                new MapSqlParameterSource("day", day), Boolean.class));
+    }
+
+    /** Number of baseline rows netmon yields for [from, to) (0 = nothing to replace with). */
+    public int cfBaselineRowsAvailable(Instant from, Instant to, String zone) {
+        Integer n = named.queryForObject("SELECT count(*) FROM (" + CF_BASELINE_SELECT + ") b",
+                window(from, to).addValue("zone", zone), Integer.class);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * Replaces the baseline rows of the Zurich days in [from, to) with netmon's current rows (nightly: one day;
+     * backfill: a range). {@code zone} is the analytics time zone name.
+     */
+    public int replaceCfBaseline(LocalDate firstDay, LocalDate lastDay, Instant from, Instant to, String zone) {
+        named.update("DELETE FROM webanalytics.daily_cf_baseline WHERE day >= :first AND day <= :last",
+                new MapSqlParameterSource("first", firstDay).addValue("last", lastDay));
+        return named.update("INSERT INTO webanalytics.daily_cf_baseline (day, path, locale, requests, sampled) "
+                + CF_BASELINE_SELECT, window(from, to).addValue("zone", zone));
     }
 
     public void replaceMonth(MonthlyRow row) {
@@ -312,7 +432,11 @@ public class RollupRepository {
                 rs.getObject("form_started", Boolean.class),
                 rs.getString("click_kind"),
                 rs.getString("click_target"),
-                rs.getString("click_area"));
+                rs.getString("click_area"),
+                rs.getString("country"),
+                rs.getString("browser_family"),
+                rs.getString("os_family"),
+                rs.getString("viewport"));
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

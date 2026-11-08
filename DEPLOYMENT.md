@@ -213,7 +213,7 @@ WA-3a adds the migration `V7__webanalytics_core_aggregates` (nine tables, additi
      value: "true"
    ```
 
-   This env var binds to the dashed key only because `application.yaml` defines `netmon.collectors.webanalytics-rollup.enabled`; `RollupEnableBindingTest` pins both the YAML entry and this binding (the spelling without the underscore, `..._WEBANALYTICSROLLUP_...`, does not bind). Alternative: `SPRING_APPLICATION_JSON` with `{"netmon":{"collectors":{"webanalytics-rollup":{"enabled":true}}}}`. After rollout: the next 01:12 run writes yesterday with `final = false`, the 07:30 run rewrites it as final; `/api/webanalytics/status.lastCompleteDay` then shows yesterday.
+   This env var binds to the dashed key only because `application.yaml` defines `netmon.collectors.webanalytics-rollup.enabled`; `RollupEnableBindingTest` pins both the YAML entry and this binding, and shows that without the YAML entry no env var reaches the dashed key. Alternative: `SPRING_APPLICATION_JSON` with `{"netmon":{"collectors":{"webanalytics-rollup":{"enabled":true}}}}`. After rollout: the next 01:12 run writes yesterday with `final = false`, the 07:30 run rewrites it as final; `/api/webanalytics/status.lastCompleteDay` then shows yesterday.
 5. **Latency check on the cluster** (docs/100 §17 WA-3a, Q4 b): only meaningful once final days cover the 365-day range, i.e. about a year after go-live. Until then record it in #54 as pending; the local test with 365 seeded days (under 60 ms per endpoint) is the gate. When the data exists, time each read endpoint with `from` = `lastCompleteDay` − 364 d and `to` = `lastCompleteDay` via port-forward and record the times; each must stay under 2 s.
 
 ### Troubleshooting (WA-3a)
@@ -224,6 +224,23 @@ WA-3a adds the migration `V7__webanalytics_core_aggregates` (nine tables, additi
 | `/status`: `webanalytics-rollup` `lastErrorCode=internal`, `consecutiveFailures` > 0 | A day failed (statement timeout, database error); the log names only the exception class; the next run retries the same days |
 | `lastCompleteDay` stays the day before yesterday after 07:30 | Spring-forward day (the close moves to 08:15) or the 07:30 run failed; the next 01:12 run finalises it |
 | 403 for the furchert-ch read token | Token requested without `scope=analytics:read`, or a role-bearing user token |
+
+## WA-3b rollout (#55): paths, funnels, audience, coverage
+
+WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, additive), raises the rollup definition to 2, and adds `GET /api/webanalytics/funnels`, `/paths`, `/audience`, `/coverage` plus the `/pages/detail` drilldown (contract `docs/100-web-analytics.md` rev 3.5). No new env var, Secret key, NetworkPolicy, outbound destination or dependency. The rollup gate N1 is unchanged.
+
+1. **Merge this PR.** Flux rolls out the image; Flyway applies V8. `/api/webanalytics/status` then shows `definitionVersion: 2`; the four new endpoints answer with the empty state.
+2. **Rollup still disabled:** nothing else happens. On the first enabled run (after gate N1) the collector backfills `daily_cf_baseline` from every day netmon holds (about 90 days, one statement) and recomputes the last 30 days with definition 2 (at most 31 days per run).
+3. **Rollup already enabled when WA-3b ships:** the same happens on the next trigger (01:12 or 07:30). Check afterwards: `select count(*), min(day), max(day) from webanalytics.daily_cf_baseline;` and `select definition_version, count(*) from webanalytics.rollup_day group by 1;`.
+4. `/coverage` compares nothing until WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` (homelab-data-service#61); a future date also compares nothing until that day.
+
+### Troubleshooting (WA-3b)
+
+| Symptom | Likely cause |
+|---|---|
+| `/status`: `webanalytics-rollup` `lastErrorCode=partial`, message names the CF baseline | The Cloudflare-baseline step failed or its lock was held; the analytics days were written; the next run retries (the backfill only while the table is still empty) |
+| `daily_cf_baseline` stays empty after enabling | netmon holds no request groups yet (Cloudflare collectors without credentials); the backfill retries on every run until netmon has data |
+| `/funnels`, `/paths` or `/audience` return an empty range | No final day with definition 2 yet, or none after the newest final definition-1 day (for example after a rollback longer than 30 days; `definitionFrom` null) |
 
 ## Verification (§11 NM-0)
 
@@ -247,6 +264,7 @@ A token without `netmon:read` must get 403.
 - Code: revert the image tag commit in `k8s/deployment.yaml`, or suspend the Flux Kustomization `data-service`.
 - Schema: migrations are forward-only. An older image ignores newer migrations only if they are additive, so never edit or delete a merged migration.
 - WA-1 (V6, docs/100 §12.4): the previous image starts on a V6 database because Flyway ignores applied future migrations (`spring.flyway.ignore-migration-patterns` default `*:future`, not overridden here). Verified in WA-1 phase 1 and pinned by `WebAnalyticsUpgradeIntegrationTest`. Never edit or undo V6; the `webanalytics` schema simply stays. To stop ingest without a data-service change, set `ANALYTICS_COLLECT_ENABLED=false` in furchert-ch (pod delete).
+- WA-3b (V8): additive; the previous image (definition 1) starts on a V8 database (`*:future`) and treats definition-2 days as current, so it does not rewrite them; the V8 tables stay. No new dependency.
 - WA-3a (V7): additive; the previous image starts on a V7 database (`*:future`). To stop the rollup without a code change, set `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED` to `"false"` (or remove it; the YAML default is `false`) and delete the pod. If the alternative `SPRING_APPLICATION_JSON` was used to enable it, change it there too: it outranks the env var. Aggregates stay as they are. A re-enabled run only writes days that are missing, provisional days once they have closed, and days on an outdated definition within the last 30 days (final ones included); at most 31 days per category per run, so a long backlog takes several runs. Other final days are not rewritten. WA-3a adds no dependency.
 - Collectors: set `netmon.collectors.<name>.enabled=false` to stop one source without a code change. Collector names contain dashes (for example `cloudflare-requests`), which a plain env var cannot express, so use `SPRING_APPLICATION_JSON` in the deployment:
 

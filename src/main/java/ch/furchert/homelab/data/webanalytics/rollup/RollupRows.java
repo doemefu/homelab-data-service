@@ -52,8 +52,34 @@ public final class RollupRows {
                                int definitionVersion, boolean fin, Instant rolledUpAt) {
     }
 
-    /** Everything written for one day except {@code daily_visitors} and {@code rollup_day}. */
+    public record TransitionRow(String entryLocale, String deviceClass, String fromPath, String toPath,
+                                int transitions) {
+    }
+
+    public record FunnelRow(String funnelId, int step, String entryLocale, String deviceClass, int visits) {
+    }
+
+    public record GroupPathRow(String pathKey, int visits, int convertingVisits) {
+    }
+
+    public record EntryExitRow(String entryPath, String exitPath, int visits) {
+    }
+
+    public record IntentSeenRow(String seen, int visits) {
+    }
+
+    /** Visits and engaged visits; no conversions per audience attribute (docs/100 §7.8, rev 3.5). */
+    public record DimensionRow(String dimension, String value, int visits, int engagedVisits) {
+    }
+
+    /**
+     * Everything the visit model writes for one day except {@code daily_visitors} and {@code rollup_day}; WA-3b adds
+     * the journey and audience tables.
+     */
     public record DayRows(List<VisitsRow> visits, List<PageRow> pages, List<SectionRow> sections,
-                          List<ClickRow> clicks, List<SourceRow> sources, List<ConversionRow> conversions) {
+                          List<ClickRow> clicks, List<SourceRow> sources, List<ConversionRow> conversions,
+                          List<TransitionRow> transitions, List<FunnelRow> funnels, List<GroupPathRow> groupPaths,
+                          List<EntryExitRow> entryExits, List<IntentSeenRow> intentSeen,
+                          List<DimensionRow> dimensions) {
     }
 }

@@ -18,7 +18,7 @@ import java.util.Map;
 public class WebAnalyticsMetrics {
 
     /** The nine {@code edgeDrops} keys (docs/100 §6.2), in wire order. */
-    static final List<String> EDGE_REASONS = List.of("bot", "signed_in", "consent", "invalid", "path",
+    public static final List<String> EDGE_REASONS = List.of("bot", "signed_in", "consent", "invalid", "path",
             "rate_limited", "mint_limited", "overflow", "expired");
 
     private final Counter accepted;

@@ -1,5 +1,6 @@
 package ch.furchert.homelab.data.webanalytics.rollup;
 
+import ch.furchert.homelab.data.config.RetentionProperties;
 import ch.furchert.homelab.data.config.WebAnalyticsProperties;
 import ch.furchert.homelab.data.netmon.collector.CollectorRunner;
 import ch.furchert.homelab.data.netmon.collector.CollectorStateRepository;
@@ -60,10 +61,12 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
     private final Clock clock;
     private final ZurichDays days;
     private final RollupPlanner planner;
+    private final int netmonRetentionDays;
 
     public WebAnalyticsRollupCollector(RollupRepository repository, CollectorStateRepository state,
                                        CollectorRunner runner, PlatformTransactionManager transactionManager,
-                                       Clock clock, WebAnalyticsProperties properties) {
+                                       Clock clock, WebAnalyticsProperties properties,
+                                       RetentionProperties retention) {
         this.repository = repository;
         this.state = state;
         this.runner = runner;
@@ -71,6 +74,7 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         this.clock = clock;
         this.days = new ZurichDays(properties.timezone());
         this.planner = new RollupPlanner(days);
+        this.netmonRetentionDays = retention.inboundRequestGroupsDays();
     }
 
     @Override
@@ -132,6 +136,101 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
                         "advisory lock held by another session; monthly visitors not written");
             }
         }
+        String cfProblems = cfBaseline(plan);
+        if (cfProblems != null) {
+            throw new CollectorWarning(ErrorCode.PARTIAL, cfProblems);
+        }
+    }
+
+    /**
+     * The Cloudflare baseline (docs/100 §7.8, rev 3.5), after the analytics days and in separate transactions, so a
+     * failure here never aborts the rollup: a one-time backfill while the table is empty, then a replace for every day
+     * rolled in this run. The replaces run only after the backfill completed: otherwise they would fill the empty
+     * table and the next run would never retry the backfill. Failures are logged by class name and returned as one
+     * warning message (null = none).
+     */
+    String cfBaseline(List<LocalDate> rolled) {
+        List<String> problems = new ArrayList<>();
+        try {
+            if (!Boolean.TRUE.equals(transactions.execute(status -> backfillCfBaselineIfEmpty()))) {
+                problems.add("advisory lock held; CF baseline backfill skipped");
+            }
+        } catch (RuntimeException e) {
+            log.warn("[{}] CF baseline backfill failed: {}", NAME, e.getClass().getSimpleName());
+            problems.add("CF baseline backfill failed (" + e.getClass().getSimpleName() + ")");
+        }
+        if (!problems.isEmpty()) {
+            return String.join("; ", problems);
+        }
+        for (LocalDate day : rolled) {
+            try {
+                if (!Boolean.TRUE.equals(transactions.execute(status -> replaceCfBaselineDay(day)))) {
+                    problems.add("advisory lock held; CF baseline not refreshed");
+                    break;
+                }
+            } catch (RuntimeException e) {
+                log.warn("[{}] CF baseline day={} failed: {}", NAME, day, e.getClass().getSimpleName());
+                problems.add("CF baseline " + day + " failed (" + e.getClass().getSimpleName() + ")");
+            }
+        }
+        if (problems.isEmpty()) {
+            return null;
+        }
+        String message = String.join("; ", problems);
+        return message.length() > 180 ? message.substring(0, 180) : message;
+    }
+
+    /**
+     * One-time backfill (docs/100 §7.8): only while {@code daily_cf_baseline} is empty, checked after the lock in the
+     * same transaction. Fills every Zurich day netmon still holds from the second one (the oldest is cut by netmon's
+     * retention and therefore partial) to yesterday. Exempt from {@link RollupPlanner#eligible}: it writes neither
+     * event-derived tables nor {@code rollup_day}. Nothing in netmon yet → nothing written, retried next run.
+     */
+    boolean backfillCfBaselineIfEmpty() {
+        if (!repository.tryLock()) {
+            return false;
+        }
+        repository.applyDaySettings();
+        if (!repository.cfBaselineEmpty()) {
+            return true;
+        }
+        Instant firstHour = repository.firstNetmonHour();
+        if (firstHour == null) {
+            return true;
+        }
+        LocalDate first = days.dayOf(firstHour).plusDays(1);
+        LocalDate last = days.dayOf(clock.instant()).minusDays(1);
+        if (first.isAfter(last)) {
+            return true;
+        }
+        int rows = repository.replaceCfBaseline(first, last, days.start(first), days.start(last.plusDays(1)),
+                days.zone().getId());
+        log.info("[{}] CF baseline backfilled days={}..{} rows={}", NAME, first, last, rows);
+        return true;
+    }
+
+    /**
+     * Nightly replace of one day's baseline. Skipped for days older than netmon's retention (their source rows are
+     * gone or cut) and when netmon yields no row for a day that already has baseline rows, so stored history is never
+     * wiped by a later run.
+     */
+    boolean replaceCfBaselineDay(LocalDate day) {
+        if (!repository.tryLock()) {
+            return false;
+        }
+        repository.applyDaySettings();
+        LocalDate oldestComplete = days.dayOf(clock.instant()).minusDays(netmonRetentionDays - 1L);
+        if (day.isBefore(oldestComplete)) {
+            return true;
+        }
+        Instant from = days.start(day);
+        Instant to = days.start(day.plusDays(1));
+        String zone = days.zone().getId();
+        if (repository.cfBaselineRowsAvailable(from, to, zone) == 0 && repository.cfBaselineHasDay(day)) {
+            return true;
+        }
+        repository.replaceCfBaseline(day, day, from, to, zone);
+        return true;
     }
 
     private boolean rollDay(LocalDate day, Map<LocalDate, DaySummary> memo) {
@@ -163,7 +262,7 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
 
         int[] raw = repository.rawCounts(days.start(day), days.start(day.plusDays(1)));
         boolean fin = days.isClosed(day, now);
-        repository.replaceDay(day, computed.rows(), visitors, new RollupDayRow(day, raw[0], raw[1],
+        repository.replaceDay(day, days.start(day), days.start(day.plusDays(1)), computed.rows(), visitors, new RollupDayRow(day, raw[0], raw[1],
                 computed.included(), computed.orphans(), RollupPlanner.DEFINITION_VERSION, fin, now));
         repository.allFinalPrefixEnd()
                 .ifPresent(end -> state.updateWindowEnd(NAME, days.start(end.plusDays(1))));
@@ -205,7 +304,7 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         Instant from = days.start(day).minus(MARGIN);
         Instant to = days.start(day.plusDays(1)).plus(MARGIN);
         List<RawEvent> events = repository.loadWindow(from, to);
-        Map<UUID, Instant> earlier = repository.earliestBefore(from, to);
+        Set<UUID> earlier = repository.visitorsSeenBefore(from, to);
 
         Map<UUID, List<RawEvent>> byVisitor = new LinkedHashMap<>();
         for (RawEvent e : events) {
@@ -227,7 +326,7 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
                     excluded.add(visit);
                 } else {
                     Instant firstPageviewAt = visit.firstPageview().occurredAt();
-                    boolean isNew = !earlier.containsKey(entry.getKey())
+                    boolean isNew = !earlier.contains(entry.getKey())
                             && !firstSeenInWindow.isBefore(firstPageviewAt);
                     included.add(visit);
                     includedNew.add(isNew);

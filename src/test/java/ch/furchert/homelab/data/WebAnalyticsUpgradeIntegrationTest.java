@@ -68,13 +68,14 @@ class WebAnalyticsUpgradeIntegrationTest {
                         """).query(Boolean.class).single()).isTrue();
         assertThat(jdbc.sql("SELECT count(*) FROM netmon.collector_state WHERE collector = 'upgrade-marker'")
                 .query(Long.class).single()).isEqualTo(1L);
-        // V6 (WA-1: 3 tables) and V7 (WA-3a: 9 tables) are both applied on top of V5.
+        // V6 (WA-1: 3 tables), V7 (WA-3a: 9 tables) and V8 (WA-3b: 8 tables) are applied on top of V5.
         assertThat(jdbc.sql("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'webanalytics'")
-                .query(Long.class).single()).isEqualTo(12L);
+                .query(Long.class).single()).isEqualTo(20L);
 
         // 2. Rollback: an image before WA-1 (V1 to V5) and the WA-1 image (V1 to V6) against the newest database.
         olderImageStarts(5, "public", "netmon");
         olderImageStarts(6, "public", "netmon", "webanalytics");
+        olderImageStarts(7, "public", "netmon", "webanalytics");
     }
 
     private static void olderImageStarts(int newestVersion, String... schemas) throws IOException {
