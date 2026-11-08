@@ -11,14 +11,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.transaction.TransactionException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.core.JacksonException;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 
 /**
  * {@code POST /api/webanalytics/events} (docs/100 §6.2, §6.3). Access control and the no-store headers come from
@@ -53,6 +57,21 @@ public class IngestController {
             throw new WebAnalyticsStorageException();
         }
         return new IngestResponse(outcome.accepted(), outcome.duplicates(), outcome.rejectedTotal(), false);
+    }
+
+    /**
+     * 500 {@code internal} for a failed batch write. The failure was already logged with its class name only, so
+     * this handler logs nothing (the generic advice would add an ERROR line with a stack trace).
+     */
+    @ExceptionHandler(WebAnalyticsStorageException.class)
+    ResponseEntity<ProblemDetail> storageFailure(HttpServletRequest request) {
+        ProblemDetail body = ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error");
+        body.setType(URI.create("about:blank"));
+        body.setInstance(URI.create(request.getRequestURI()));
+        body.setProperty("code", ProblemCode.INTERNAL);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(body);
     }
 
     static byte[] readBody(HttpServletRequest request) throws IOException {

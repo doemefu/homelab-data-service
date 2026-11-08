@@ -31,7 +31,8 @@ import java.util.UUID;
  * Stores one validated batch in one transaction (docs/100 §6.2, §7.2). Analytics events are deduplicated on
  * {@code eventId}; a {@code (pageviewId, seq)} already taken by another id is rejected ({@code other}). Enquiries
  * only increment {@code daily_enquiries} (Zurich day of {@code occurredAt}) behind the in-memory 2 h dedupe and
- * never appear in the response counters. Metrics are recorded after commit and enquiry reservations are released
+ * never appear in {@code accepted}/{@code duplicates}; an invalid enquiry counts as rejected in the response and
+ * the metric, but never in {@code daily_ingest_stats}. Metrics are recorded after commit and enquiry reservations are released
  * on rollback, so a retried 500 neither double-counts nor loses anything.
  */
 @Service
@@ -66,7 +67,8 @@ public class IngestService {
     @Transactional
     public IngestOutcome ingest(IngestRequest request, String source) {
         List<UUID> reservedEnquiries = new ArrayList<>();
-        Map<RejectReason, Integer> rejected = new EnumMap<>(RejectReason.class);
+        Map<RejectReason, Integer> rejected = new EnumMap<>(RejectReason.class); // response + metric, enquiries incl.
+        Map<RejectReason, Integer> statsRejected = new EnumMap<>(RejectReason.class); // daily_ingest_stats, no enquiries
         Map<String, Integer> edgeDrops = new LinkedHashMap<>(request.edgeDrops().byReason());
         int[] counters = new int[2]; // accepted, duplicates
         registerCompletion(reservedEnquiries, rejected, edgeDrops, counters);
@@ -82,6 +84,9 @@ public class IngestService {
             EventValidator.Result result = validator.validate(dto, now);
             if (!result.isValid()) {
                 rejected.merge(result.reason(), 1, Integer::sum);
+                if (!EventValidator.ENQUIRY.equals(dto.type())) {
+                    statsRejected.merge(result.reason(), 1, Integer::sum); // §7.2: enquiries are never counted there
+                }
                 continue;
             }
             ValidEvent event = result.event();
@@ -99,6 +104,7 @@ public class IngestService {
             PageviewSeq key = keyOf(event);
             if (key != null && batchKeys.containsKey(key)) {
                 rejected.merge(RejectReason.OTHER, 1, Integer::sum);
+                statsRejected.merge(RejectReason.OTHER, 1, Integer::sum);
                 continue;
             }
             batchIds.add(event.eventId());
@@ -108,7 +114,8 @@ public class IngestService {
             candidates.add(event);
         }
 
-        List<ValidEvent> toInsert = classifyAgainstStored(candidates, batchIds, batchKeys, rejected, counters);
+        List<ValidEvent> toInsert = classifyAgainstStored(candidates, batchIds, batchKeys, rejected, statsRejected,
+                counters);
         int[] stored = repository.insertEvents(toInsert, source);
         for (int count : stored) {
             if (count == 0) {
@@ -120,7 +127,7 @@ public class IngestService {
 
         // Upserts last and in key order, so concurrent batches lock the hot rows in the same order.
         repository.incrementIngestStats(LocalDate.ofInstant(now, zone),
-                statsCounts(counters[0], counters[1], rejected, edgeDrops));
+                statsCounts(counters[0], counters[1], statsRejected, edgeDrops));
         repository.incrementEnquiries(enquiryDays);
         return new IngestOutcome(counters[0], counters[1], reservedEnquiries.size(), Map.copyOf(rejected),
                 Map.copyOf(edgeDrops));
@@ -129,7 +136,8 @@ public class IngestService {
     /** Drops stored duplicates and rejects stored-key reuse; returns the rest sorted by event id. */
     private List<ValidEvent> classifyAgainstStored(List<ValidEvent> candidates, Set<UUID> batchIds,
                                                    Map<PageviewSeq, UUID> batchKeys,
-                                                   Map<RejectReason, Integer> rejected, int[] counters) {
+                                                   Map<RejectReason, Integer> rejected,
+                                                   Map<RejectReason, Integer> statsRejected, int[] counters) {
         if (candidates.isEmpty()) {
             return List.of();
         }
@@ -151,6 +159,7 @@ public class IngestService {
                 counters[1]++;
             } else if (key != null && storedKeys.containsKey(key)) {
                 rejected.merge(RejectReason.OTHER, 1, Integer::sum);
+                statsRejected.merge(RejectReason.OTHER, 1, Integer::sum);
             } else {
                 toInsert.add(event);
             }

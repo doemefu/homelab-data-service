@@ -324,6 +324,9 @@ class WebAnalyticsIngestIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.rejected").value(2));
         assertThat(counter("webanalytics.events.rejected", "reason", "shape") - shape).isEqualTo(2);
         assertThat(jdbc.sql("SELECT count(*) FROM webanalytics.daily_enquiries").query(Long.class).single()).isZero();
+        // docs/100 §7.2: enquiries (valid, duplicate or invalid) are never counted in daily_ingest_stats.
+        assertThat(jdbc.sql("SELECT count(*) FROM webanalytics.daily_ingest_stats WHERE events > 0")
+                .query(Long.class).single()).isZero();
     }
 
     @Test
