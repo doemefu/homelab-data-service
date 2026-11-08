@@ -271,7 +271,6 @@ data-service checks the patterns of furchert-ch's registries (`TRACKED_PATHS`, `
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `netmon_collector_last_success_timestamp_seconds` | gauge | `collector` | Unix time of the collector's last successful run; **NaN until the first success** (§4.1). Registered at startup only for collectors that are enabled and able to succeed. No series is exported for a collector whose kill switch is off, for `reputation` without `ABUSEIPDB_API_KEY`, or for `cloudflare-requests`/`cloudflare-firewall` started without `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID`, or for `login-events` started without `AUTH_CLIENT_SECRET`. Those three still run and report `credentials` in `/status`. |
-
 | `webanalytics_events_accepted_total` | counter | — | Analytics events stored (enquiries excluded) |
 | `webanalytics_events_duplicate_total` | counter | — | Analytics events whose `eventId` was already stored or earlier in the batch |
 | `webanalytics_enquiries_total` | counter | — | `daily_enquiries` increments |
