@@ -72,6 +72,10 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
         assertThat(sum("SELECT sum(visits) FROM webanalytics.daily_entry_exit WHERE day = '2026-11-08'")).isEqualTo(visits);
         assertThat(jdbc.sql("SELECT dimension, sum(visits) FROM webanalytics.daily_dimension WHERE day = '2026-11-08' GROUP BY dimension")
                 .query((rs, i) -> rs.getLong(2)).list()).hasSize(5).allMatch(n -> n == visits);
+        long engaged = sum("SELECT sum(engaged_visits) FROM webanalytics.daily_visits WHERE day = '2026-11-08'");
+        assertThat(engaged).isPositive();
+        assertThat(jdbc.sql("SELECT dimension, sum(engaged_visits) FROM webanalytics.daily_dimension WHERE day = '2026-11-08' GROUP BY dimension")
+                .query((rs, i) -> rs.getLong(2)).list()).hasSize(5).allMatch(n -> n == engaged);
         assertThat(jdbc.sql("SELECT visits FROM webanalytics.daily_group_path WHERE day = '2026-11-08' AND path_key = 'offer > contact > (exit)'")
                 .query(Long.class).single()).isEqualTo(1L);
         assertThat(jdbc.sql("SELECT visits FROM webanalytics.daily_intent_seen WHERE day = '2026-11-08' AND seen = 'prices'")

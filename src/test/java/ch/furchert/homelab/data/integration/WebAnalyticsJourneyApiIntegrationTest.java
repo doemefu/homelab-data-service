@@ -163,11 +163,54 @@ class WebAnalyticsJourneyApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.items[0].target").value("github.com"))
                 .andExpect(jsonPath("$.items[1].kind").value("nav"))
                 .andExpect(jsonPath("$.items[1].target").value("(other)"))
-                .andExpect(jsonPath("$.items[2].kind").value("(other)"))
-                .andExpect(jsonPath("$.items[2].target").value(nullValue()))
+                .andExpect(jsonPath("$.items[2].kind").value(nullValue())) // mixed kinds without a kind filter
+                .andExpect(jsonPath("$.items[2].target").value("(other)"))
+                .andExpect(jsonPath("$.items[2].path").value(nullValue()))
                 .andExpect(jsonPath("$.items[2].area").value(nullValue()))
                 .andExpect(jsonPath("$.items[2].pageVisits").value(nullValue()))
-                .andExpect(jsonPath("$.items[2].clicks").value(3)); // outbound (other) 2 + cta 1
+                .andExpect(jsonPath("$.items[2].clicks").value(3)) // outbound (other) 2 + cta 1
+                .andExpect(jsonPath("$.items[2].visits").value(3));
+        get("/api/webanalytics/clicks?kind=outbound&from=2026-11-07&to=2026-11-07&limit=1")
+                .andExpect(jsonPath("$.items", hasSize(2)))
+                .andExpect(jsonPath("$.items[0].target").value("github.com"))
+                .andExpect(jsonPath("$.items[1].kind").value("outbound")) // the filtered kind
+                .andExpect(jsonPath("$.items[1].target").value("(other)"))
+                .andExpect(jsonPath("$.items[1].path").value(nullValue()))
+                .andExpect(jsonPath("$.items[1].clicks").value(2));
+    }
+
+    @Test
+    void audienceStartsAtTheFirstDayOfTheCurrentDefinition() throws Exception {
+        rows.rollupDay(LAST.minusDays(1), true, 1); // former definition: no WA-3b rows expected, ignored if present
+        rows.rollupDay(LAST, true);
+        rows.visits(LAST.minusDays(1), "de", "desktop", 7, 0, 0, 0, 7);
+        rows.visits(LAST, "de", "desktop", 2, 0, 0, 0, 2);
+        rows.dimension(LAST.minusDays(1), "country", "DE", 7);
+        rows.dimension(LAST, "country", "CH", 2);
+
+        get("/api/webanalytics/audience?from=2026-11-06&to=2026-11-07")
+                .andExpect(jsonPath("$.range.from").value("2026-11-07"))
+                .andExpect(jsonPath("$.newVsReturning.newVisits").value(1)) // 2 / 2; the 7 visits of 2026-11-06 are excluded
+                .andExpect(jsonPath("$.dimensions.country", hasSize(1)))
+                .andExpect(jsonPath("$.dimensions.country[0].value").value("CH"));
+        get("/api/webanalytics/audience?from=2026-11-06&to=2026-11-06")
+                .andExpect(jsonPath("$.range.from").value(nullValue()))
+                .andExpect(jsonPath("$.dimensions.country", hasSize(0)));
+    }
+
+    @Test
+    void pageDetailPreviousAndNextStartAtTheFirstDayOfTheCurrentDefinition() throws Exception {
+        rows.rollupDay(LAST.minusDays(1), true, 1);
+        rows.rollupDay(LAST, true);
+        rows.transition(LAST.minusDays(1), "de", "/", "/automation", 8);
+        rows.transition(LAST, "de", "(entrance)", "/automation", 2);
+
+        get("/api/webanalytics/pages/detail?path=/automation&from=2026-11-06&to=2026-11-07")
+                .andExpect(jsonPath("$.previous[*].path", contains("(entrance)")))
+                .andExpect(jsonPath("$.previous[0].count").value(2));
+        get("/api/webanalytics/pages/detail?path=/automation&from=2026-11-06&to=2026-11-06")
+                .andExpect(jsonPath("$.previous", hasSize(0)))
+                .andExpect(jsonPath("$.next", hasSize(0)));
     }
 
     @Test

@@ -142,19 +142,25 @@ public final class DayAggregator {
         Set<String> countries = topN(included.stream()
                 .map(f -> nullToEmpty(f.visit().firstPageview().country()))
                 .collect(Collectors.toMap(Function.identity(), x -> 1, Integer::sum)));
-        Map<List<String>, Integer> counts = new TreeMap<>(Comparator.<List<String>, Integer>comparing(
+        Map<List<String>, int[]> counts = new TreeMap<>(Comparator.<List<String>, Integer>comparing(
                 k -> DIMENSIONS.indexOf(k.get(0))).thenComparing(k -> k.get(1)));
         for (VisitFacts f : included) {
             RawEvent pv = f.visit().firstPageview();
             String country = nullToEmpty(pv.country());
-            counts.merge(List.of("country", countries.contains(country) ? country : OTHER), 1, Integer::sum);
-            counts.merge(List.of("browser_family", nullToEmpty(pv.browserFamily())), 1, Integer::sum);
-            counts.merge(List.of("os_family", nullToEmpty(pv.osFamily())), 1, Integer::sum);
-            counts.merge(List.of("viewport", nullToEmpty(pv.viewport())), 1, Integer::sum);
-            counts.merge(List.of("visitor_type", f.isNew() ? "new" : "returning"), 1, Integer::sum);
+            int engaged = f.visit().engaged() ? 1 : 0;
+            for (List<String> key : List.of(
+                    List.of("country", countries.contains(country) ? country : OTHER),
+                    List.of("browser_family", nullToEmpty(pv.browserFamily())),
+                    List.of("os_family", nullToEmpty(pv.osFamily())),
+                    List.of("viewport", nullToEmpty(pv.viewport())),
+                    List.of("visitor_type", f.isNew() ? "new" : "returning"))) {
+                int[] c = counts.computeIfAbsent(key, k -> new int[2]);
+                c[0]++;
+                c[1] += engaged;
+            }
         }
         List<DimensionRow> rows = new ArrayList<>();
-        counts.forEach((k, n) -> rows.add(new DimensionRow(k.get(0), k.get(1), n)));
+        counts.forEach((k, c) -> rows.add(new DimensionRow(k.get(0), k.get(1), c[0], c[1])));
         return rows;
     }
 

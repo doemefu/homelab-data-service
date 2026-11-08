@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -39,10 +41,14 @@ public class WebAnalyticsJourneyController {
 
     private final AggregateQueryRepository queries;
     private final LocalDate goLiveDate;
+    private final Clock clock;
+    private final ZoneId zone;
 
-    WebAnalyticsJourneyController(AggregateQueryRepository queries, WebAnalyticsProperties properties) {
+    WebAnalyticsJourneyController(AggregateQueryRepository queries, WebAnalyticsProperties properties, Clock clock) {
         this.queries = queries;
         this.goLiveDate = properties.coverage().goLiveDate();
+        this.clock = clock;
+        this.zone = properties.timezone();
     }
 
     @GetMapping("/funnels")
@@ -109,7 +115,9 @@ public class WebAnalyticsJourneyController {
                                        @RequestParam(required = false) String device,
                                        @RequestParam(required = false) String limit) {
         int max = ReadParams.limit(limit);
-        ReadParams.Query q = parse(from, to, compare, locale, device, false);
+        // rev 3.5: the audience figures (dimensions) exist from the first day of the current definition on.
+        ReadParams.Query q = ReadParams.clampToDefinition(parse(from, to, compare, locale, device, false),
+                queries.definitionFrom(RollupPlanner.DEFINITION_VERSION).orElse(null));
         ReadParams.Range r = q.range();
         if (r == null) {
             List<ReadDtos.ValueCount> none = List.of();
@@ -151,11 +159,14 @@ public class WebAnalyticsJourneyController {
         ReadParams.Query q = parse(from, to, compare, locale, device, false);
         ReadParams.Range r = q.range();
         ReadDtos.DataQuality quality = dataQuality(r == null ? null : r.from(), r == null ? null : r.to());
-        LocalDate windowFrom = r == null || goLiveDate == null ? null
-                : (r.from().isBefore(goLiveDate) ? goLiveDate : r.from());
+        // baselineFrom is null while the go-live date is unset or still in the future (rev 3.5).
+        LocalDate baselineFrom = goLiveDate == null || goLiveDate.isAfter(LocalDate.now(clock.withZone(zone)))
+                ? null : goLiveDate;
+        LocalDate windowFrom = r == null || baselineFrom == null ? null
+                : (r.from().isBefore(baselineFrom) ? baselineFrom : r.from());
         if (windowFrom == null || windowFrom.isAfter(r.to())) {
-            return new ReadDtos.CoverageResponse(ReadParams.rangeDto(q), q.filters(), goLiveDate, List.of(), List.of(),
-                    new ReadDtos.Enquiries(0, 0), quality);
+            return new ReadDtos.CoverageResponse(ReadParams.rangeDto(q), q.filters(), baselineFrom, List.of(),
+                    List.of(), new ReadDtos.Enquiries(0, 0), quality);
         }
         LocalDate windowTo = r.to();
         Map<LocalDate, Long> pageviews = queries.pageviewsByDay(windowFrom, windowTo);
@@ -182,7 +193,7 @@ public class WebAnalyticsJourneyController {
                 .toList();
         ReadDtos.Enquiries enquiries = new ReadDtos.Enquiries(queries.consentedSubmits(windowFrom, windowTo),
                 queries.enquiriesTotal(windowFrom, windowTo));
-        return new ReadDtos.CoverageResponse(ReadParams.rangeDto(q), q.filters(), goLiveDate, daily, byPage,
+        return new ReadDtos.CoverageResponse(ReadParams.rangeDto(q), q.filters(), baselineFrom, daily, byPage,
                 enquiries, quality);
     }
 

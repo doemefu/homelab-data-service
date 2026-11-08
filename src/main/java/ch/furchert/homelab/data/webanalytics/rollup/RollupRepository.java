@@ -302,10 +302,11 @@ public class RollupRepository {
                 """, rows.intentSeen(), (IntentSeenRow r) -> new MapSqlParameterSource("day", day)
                 .addValue("seen", r.seen()).addValue("visits", r.visits()));
         batch("""
-                INSERT INTO webanalytics.daily_dimension (day, dimension, value, visits)
-                VALUES (:day, :dimension, :value, :visits)
+                INSERT INTO webanalytics.daily_dimension (day, dimension, value, visits, engaged_visits)
+                VALUES (:day, :dimension, :value, :visits, :engaged)
                 """, rows.dimensions(), (DimensionRow r) -> new MapSqlParameterSource("day", day)
-                .addValue("dimension", r.dimension()).addValue("value", r.value()).addValue("visits", r.visits()));
+                .addValue("dimension", r.dimension()).addValue("value", r.value()).addValue("visits", r.visits())
+                .addValue("engaged", r.engagedVisits()));
         // Goals by submission day, excluded and orphan visits included (matches daily_enquiries, docs/100 §7.8).
         named.update("""
                         INSERT INTO webanalytics.daily_submits (day, consented_submits)

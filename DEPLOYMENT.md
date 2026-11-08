@@ -213,7 +213,7 @@ WA-3a adds the migration `V7__webanalytics_core_aggregates` (nine tables, additi
      value: "true"
    ```
 
-   This env var binds to the dashed key only because `application.yaml` defines `netmon.collectors.webanalytics-rollup.enabled`; `RollupEnableBindingTest` pins both the YAML entry and this binding (the spelling without the underscore, `..._WEBANALYTICSROLLUP_...`, does not bind). Alternative: `SPRING_APPLICATION_JSON` with `{"netmon":{"collectors":{"webanalytics-rollup":{"enabled":true}}}}`. After rollout: the next 01:12 run writes yesterday with `final = false`, the 07:30 run rewrites it as final; `/api/webanalytics/status.lastCompleteDay` then shows yesterday.
+   This env var binds to the dashed key only because `application.yaml` defines `netmon.collectors.webanalytics-rollup.enabled`; `RollupEnableBindingTest` pins both the YAML entry and this binding, and shows that without the YAML entry no env var reaches the dashed key. Alternative: `SPRING_APPLICATION_JSON` with `{"netmon":{"collectors":{"webanalytics-rollup":{"enabled":true}}}}`. After rollout: the next 01:12 run writes yesterday with `final = false`, the 07:30 run rewrites it as final; `/api/webanalytics/status.lastCompleteDay` then shows yesterday.
 5. **Latency check on the cluster** (docs/100 §17 WA-3a, Q4 b): only meaningful once final days cover the 365-day range, i.e. about a year after go-live. Until then record it in #54 as pending; the local test with 365 seeded days (under 60 ms per endpoint) is the gate. When the data exists, time each read endpoint with `from` = `lastCompleteDay` − 364 d and `to` = `lastCompleteDay` via port-forward and record the times; each must stay under 2 s.
 
 ### Troubleshooting (WA-3a)
@@ -232,7 +232,7 @@ WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, addit
 1. **Merge this PR.** Flux rolls out the image; Flyway applies V8. `/api/webanalytics/status` then shows `definitionVersion: 2`; the four new endpoints answer with the empty state.
 2. **Rollup still disabled:** nothing else happens. On the first enabled run (after gate N1) the collector backfills `daily_cf_baseline` from every day netmon holds (about 90 days, one statement) and recomputes the last 30 days with definition 2 (at most 31 days per run).
 3. **Rollup already enabled when WA-3b ships:** the same happens on the next trigger (01:12 or 07:30). Check afterwards: `select count(*), min(day), max(day) from webanalytics.daily_cf_baseline;` and `select definition_version, count(*) from webanalytics.rollup_day group by 1;`.
-4. `/coverage` compares nothing until WA-6 sets `webanalytics.coverage.go-live-date`.
+4. `/coverage` compares nothing until WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` (homelab-data-service#61); a future date also compares nothing until that day.
 
 ### Troubleshooting (WA-3b)
 
@@ -240,7 +240,7 @@ WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, addit
 |---|---|
 | `/status`: `webanalytics-rollup` `lastErrorCode=partial`, message names the CF baseline | The Cloudflare-baseline step failed or its lock was held; the analytics days were written; the next run retries (the backfill only while the table is still empty) |
 | `daily_cf_baseline` stays empty after enabling | netmon holds no request groups yet (Cloudflare collectors without credentials); the backfill retries on every run until netmon has data |
-| `/funnels` or `/paths` return an empty range | No final day with definition 2 yet (`definitionFrom` null) |
+| `/funnels`, `/paths` or `/audience` return an empty range | No final day with definition 2 yet (`definitionFrom` null) |
 
 ## Verification (§11 NM-0)
 

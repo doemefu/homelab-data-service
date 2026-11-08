@@ -124,7 +124,7 @@ final class ReadParams {
 
     /**
      * Clamps the range to {@code definitionFrom}, the first final day of the current rollup definition
-     * ({@code /funnels}, {@code /paths}; docs/100 §8.2, rev 3.5): {@code from} and the previous range start no earlier;
+     * ({@code /funnels}, {@code /paths}, {@code /audience}; docs/100 §8.2, §8.5, rev 3.5): {@code from} and the previous range start no earlier;
      * a previous range that ends before it is dropped; no such day yet, or nothing left, gives the empty range.
      */
     static Query clampToDefinition(Query query, LocalDate definitionFrom) {

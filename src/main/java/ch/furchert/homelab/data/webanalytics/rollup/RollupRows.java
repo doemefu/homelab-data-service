@@ -68,8 +68,8 @@ public final class RollupRows {
     public record IntentSeenRow(String seen, int visits) {
     }
 
-    /** Visits only (docs/100 §7.8, rev 3.5: no conversions per audience attribute). */
-    public record DimensionRow(String dimension, String value, int visits) {
+    /** Visits and engaged visits; no conversions per audience attribute (docs/100 §7.8, rev 3.5). */
+    public record DimensionRow(String dimension, String value, int visits, int engagedVisits) {
     }
 
     /**

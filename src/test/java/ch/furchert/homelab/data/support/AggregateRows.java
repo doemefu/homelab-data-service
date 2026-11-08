@@ -160,8 +160,8 @@ public final class AggregateRows {
 
     public void dimension(LocalDate day, String dimension, String value, int visits) {
         jdbc.sql("""
-                        INSERT INTO webanalytics.daily_dimension (day, dimension, value, visits)
-                        VALUES (:day, :dimension, :value, :visits)
+                        INSERT INTO webanalytics.daily_dimension (day, dimension, value, visits, engaged_visits)
+                        VALUES (:day, :dimension, :value, :visits, 0)
                         """)
                 .param("day", day).param("dimension", dimension).param("value", value).param("visits", visits).update();
     }

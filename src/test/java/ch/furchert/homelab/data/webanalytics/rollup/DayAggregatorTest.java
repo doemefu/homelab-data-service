@@ -137,16 +137,18 @@ class DayAggregatorTest {
     }
 
     @Test
-    void dimensionsCountVisitsOnlyWithEmptyForMissingValues() {
+    void dimensionsCountVisitsAndEngagedVisitsWithEmptyForMissingValues() {
         UUID v = UUID.randomUUID();
         RawEvent pv = new RawEvent(UUID.randomUUID(), RawEvent.PAGEVIEW, t0, v, UUID.randomUUID(), 0, "/", "de", true,
                 null, null, null, null, "mobile", null, null, null, null, null, null, null, null, null, "safari",
                 "ios", "<480");
         DayRows rows = DayAggregator.aggregate(List.of(new VisitFacts(VisitBuilder.build(List.of(pv)).getFirst(),
                 false, "direct", "")), List.of());
-        assertThat(rows.dimensions()).extracting(d -> d.dimension() + "=" + d.value() + ":" + d.visits())
-                .containsExactly("country=:1", "browser_family=safari:1", "os_family=ios:1", "viewport=<480:1",
-                        "visitor_type=returning:1");
+        // A single landing pageview without engagement: not engaged.
+        assertThat(rows.dimensions()).extracting(d -> d.dimension() + "=" + d.value() + ":" + d.visits() + "/"
+                        + d.engagedVisits())
+                .containsExactly("country=:1/0", "browser_family=safari:1/0", "os_family=ios:1/0", "viewport=<480:1/0",
+                        "visitor_type=returning:1/0");
     }
 
     private static VisitFacts facts(Visit visit) {

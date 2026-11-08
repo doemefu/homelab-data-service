@@ -31,7 +31,7 @@ class WebAnalyticsPathsMigrationIntegrationTest extends AbstractIntegrationTest 
     }
 
     @Test
-    void v8TablesAreIdFreeAndHaveNoIpOrConversionPerAttributeColumn() {
+    void v8TablesAreIdFreeAndHaveNoIpColumnAndDimensionsCarryNoConversions() {
         assertThat(jdbc.sql("""
                         SELECT table_name || '.' || column_name FROM information_schema.columns
                         WHERE table_schema = 'webanalytics' AND table_name IN (:tables)
@@ -42,7 +42,7 @@ class WebAnalyticsPathsMigrationIntegrationTest extends AbstractIntegrationTest 
                         SELECT column_name FROM information_schema.columns
                         WHERE table_schema = 'webanalytics' AND table_name = 'daily_dimension'
                         """).query(String.class).list())
-                .containsExactlyInAnyOrder("day", "dimension", "value", "visits", "computed_at");
+                .containsExactlyInAnyOrder("day", "dimension", "value", "visits", "engaged_visits", "computed_at");
     }
 
     @Test

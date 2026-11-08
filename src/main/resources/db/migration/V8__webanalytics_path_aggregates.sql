@@ -56,15 +56,17 @@ CREATE TABLE webanalytics.daily_intent_seen (
     PRIMARY KEY (day, seen)
 );
 
--- Visits per audience attribute of the visit's first pageview. Visits only: conversions per attribute kept forever
--- could tie attributes to a named enquirer (docs/100 §7.8, rev 3.5). Country: the day's top 50, rest '(other)'.
+-- Visits and engaged visits per audience attribute of the visit's first pageview. No converting_visits: conversions
+-- per attribute kept forever could tie attributes to a named enquirer (docs/100 §7.8, rev 3.5). Country: the day's
+-- top 50, rest '(other)'.
 CREATE TABLE webanalytics.daily_dimension (
     day         date        NOT NULL,
     dimension   text        NOT NULL CHECK (dimension IN ('country', 'browser_family', 'os_family', 'viewport',
                                                           'visitor_type')),
-    value       text        NOT NULL DEFAULT '',
-    visits      integer     NOT NULL CHECK (visits >= 0),
-    computed_at timestamptz NOT NULL DEFAULT now(),
+    value          text        NOT NULL DEFAULT '',
+    visits         integer     NOT NULL CHECK (visits >= 0),
+    engaged_visits integer     NOT NULL CHECK (engaged_visits >= 0),
+    computed_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (day, dimension, value)
 );
 

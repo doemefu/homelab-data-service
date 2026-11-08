@@ -87,5 +87,8 @@ webanalytics:
     read-clients: [ furchert-ch ]
   # docs/100 §7.2, §11: day boundaries of daily_ingest_stats and daily_enquiries.
   timezone: Europe/Zurich
-  # docs/100 §8.2 (rev 3.5): coverage.go-live-date (YYYY-MM-DD) is the first day of tracked traffic (baselineFrom).
-  # Unset until WA-6; while unset /api/webanalytics/coverage compares nothing.
+  # docs/100 §8.2, §11 (rev 3.5): the first day of tracked traffic (/coverage baselineFrom), YYYY-MM-DD. Empty until
+  # WA-6 (homelab-data-service#61) sets WEBANALYTICS_COVERAGE_GOLIVEDATE in k8s/deployment.yaml; while empty or in the
+  # future /api/webanalytics/coverage compares nothing. Keep the explicit entry (RollupEnableBindingTest style test).
+  coverage:
+    go-live-date:

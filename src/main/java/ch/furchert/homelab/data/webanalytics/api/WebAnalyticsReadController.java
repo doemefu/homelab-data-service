@@ -11,6 +11,7 @@ import ch.furchert.homelab.data.webanalytics.api.AggregateQueryRepository.VisitC
 import ch.furchert.homelab.data.webanalytics.ingest.EventValidator;
 import ch.furchert.homelab.data.webanalytics.rollup.Channels;
 import ch.furchert.homelab.data.webanalytics.rollup.DayAggregator;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupPlanner;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -44,6 +45,8 @@ public class WebAnalyticsReadController {
     static final String OTHER = DayAggregator.OTHER;
     static final String AUTOMATION = "/automation";
     static final Set<String> CLICK_KINDS = Set.of("cta", "link", "faq", "lang", "nav", "outbound", "mailto", "tel");
+    /** Internal marker of the folded {@code /clicks} remainder (never serialised). */
+    private static final String REMAINDER = "\u0000remainder";
     /** Default {@code limit} of the detail drilldown's previous/next lists (docs/100 §8.1, rev 3.5). */
     static final int DETAIL_LIMIT_DEFAULT = 5;
 
@@ -165,9 +168,16 @@ public class WebAnalyticsReadController {
             AggregateQueryRepository.PageDay pd = byDay.get(d);
             daily.add(new ReadDtos.PageDaily(d, pd == null ? 0 : pd.pageviews(), pd == null ? 0 : pd.visitsViewed()));
         }
-        // WA-3b: previous/next pages from daily_transition, incl. (entrance)/(exit), top `limit` + (other) (rev 3.5).
-        List<ReadDtos.PathCount> previous = pathCounts(queries.transitions(scope, null, path), true, max);
-        List<ReadDtos.PathCount> next = pathCounts(queries.transitions(scope, path, null), false, max);
+        // WA-3b: previous/next pages from daily_transition, incl. (entrance)/(exit), top `limit` + (other); bounded by
+        // definitionFrom, because transitions exist from the first day of the current definition on (rev 3.5).
+        LocalDate definitionFrom = queries.definitionFrom(RollupPlanner.DEFINITION_VERSION).orElse(null);
+        List<ReadDtos.PathCount> previous = List.of();
+        List<ReadDtos.PathCount> next = List.of();
+        if (definitionFrom != null && !r.to().isBefore(definitionFrom)) {
+            Scope transitionScope = scope(q, r.from().isBefore(definitionFrom) ? definitionFrom : r.from(), r.to());
+            previous = pathCounts(queries.transitions(transitionScope, null, path), true, max);
+            next = pathCounts(queries.transitions(transitionScope, path, null), false, max);
+        }
         return new ReadDtos.PageDetailResponse(ReadParams.rangeDto(q), q.filters(), pageItem(summary), previous, next,
                 clicks, sections, faqOpens, daily);
     }
@@ -193,16 +203,17 @@ public class WebAnalyticsReadController {
         Scope scope = scope(q, q.range().from(), q.range().to());
         Map<String, Long> pageVisits = queries.pages(scope, null).stream()
                 .collect(Collectors.toMap(PageAgg::path, PageAgg::visitsViewed));
-        // Remainder: one item {kind "(other)", target null, path "(other)", area null, pageVisits null}, merged with
-        // the stored outbound "(other)" rows; a nav "(other)" target stays its own item (rev 3.5).
+        // Remainder (rev 3.5): one item with kind null (mixed kinds; the filtered kind with a kind filter), target
+        // "(other)", path/area/pageVisits null and summed counts, merged with the stored outbound "(other)" rows; a nav
+        // "(other)" target stays its own item. REMAINDER marks it internally.
         List<ClickAgg> limited = limit(queries.clicks(scope, null, kindFilter), max, clickOrder(),
                 c -> "outbound".equals(c.kind()) && OTHER.equals(c.target()),
-                c -> new ClickAgg(OTHER, OTHER, OTHER, OTHER, c.clicks(), c.visits(), c.convertingVisits()),
-                (a, b) -> new ClickAgg(OTHER, OTHER, OTHER, OTHER, a.clicks() + b.clicks(), a.visits() + b.visits(),
-                        a.convertingVisits() + b.convertingVisits()));
+                c -> new ClickAgg(REMAINDER, OTHER, REMAINDER, REMAINDER, c.clicks(), c.visits(), c.convertingVisits()),
+                (a, b) -> new ClickAgg(REMAINDER, OTHER, REMAINDER, REMAINDER, a.clicks() + b.clicks(),
+                        a.visits() + b.visits(), a.convertingVisits() + b.convertingVisits()));
         List<ReadDtos.ClickItem> items = limited.stream()
-                .map(c -> OTHER.equals(c.area())
-                        ? new ReadDtos.ClickItem(OTHER, null, OTHER, null, c.clicks(), c.visits(),
+                .map(c -> REMAINDER.equals(c.area())
+                        ? new ReadDtos.ClickItem(kindFilter, OTHER, null, null, c.clicks(), c.visits(),
                         c.convertingVisits(), null)
                         : new ReadDtos.ClickItem(c.kind(), nullIfEmpty(c.target()), c.path(), c.area(), c.clicks(),
                         c.visits(), c.convertingVisits(), pageVisits.getOrDefault(c.path(), 0L)))
