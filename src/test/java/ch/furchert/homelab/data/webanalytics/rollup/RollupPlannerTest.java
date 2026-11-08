@@ -100,6 +100,18 @@ class RollupPlannerTest {
     }
 
     @Test
+    void daysOfTheFormerDefinitionAreRecomputedWithin30Days() {
+        // WA-3b bumped the definition to 2: final days written with version 1 count as outdated.
+        List<RolledDay> rolled = List.of(new RolledDay(LocalDate.parse("2026-11-08"), true, 1),
+                new RolledDay(LocalDate.parse("2026-10-09"), true, 1),
+                new RolledDay(LocalDate.parse("2026-10-10"), true, 1));
+        assertThat(RollupPlanner.DEFINITION_VERSION).isEqualTo(2);
+        List<LocalDate> plan = planner.plan(zurich("2026-11-09T07:30:00"), rolled);
+        assertThat(plan).contains(LocalDate.parse("2026-11-08"), LocalDate.parse("2026-10-10"))
+                .doesNotContain(LocalDate.parse("2026-10-09"));
+    }
+
+    @Test
     void eligibilityRejectsTodayAndDaysBeforeTheFirstRolledDay() {
         Instant now = zurich("2026-11-09T07:30:00");
         LocalDate first = LocalDate.parse("2026-11-01");

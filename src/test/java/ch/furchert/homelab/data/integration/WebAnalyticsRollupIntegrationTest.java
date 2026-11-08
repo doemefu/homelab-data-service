@@ -3,6 +3,7 @@ package ch.furchert.homelab.data.integration;
 import ch.furchert.homelab.data.AbstractRollupIntegrationTest;
 import ch.furchert.homelab.data.netmon.collector.CollectorWarning;
 import ch.furchert.homelab.data.support.MutableClock;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupPlanner;
 import ch.furchert.homelab.data.webanalytics.rollup.WebAnalyticsRollupCollector;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,7 +37,7 @@ class WebAnalyticsRollupIntegrationTest extends AbstractRollupIntegrationTest {
 
         Map<String, Object> day = jdbc.sql("SELECT * FROM webanalytics.rollup_day").query().singleRow();
         assertThat(day).containsEntry("day", java.sql.Date.valueOf(NOV_8)).containsEntry("final", true)
-                .containsEntry("raw_events", 0).containsEntry("visits", 0).containsEntry("definition_version", 1);
+                .containsEntry("raw_events", 0).containsEntry("visits", 0).containsEntry("definition_version", RollupPlanner.DEFINITION_VERSION);
         assertThat(lastWindowEnd()).isEqualTo(zurich("2026-11-09T00:00:00"));
     }
 

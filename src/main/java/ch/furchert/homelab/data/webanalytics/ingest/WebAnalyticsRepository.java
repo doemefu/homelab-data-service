@@ -76,16 +76,15 @@ public class WebAnalyticsRepository {
 
     /** Seed values for {@link IngestActivity} (docs/100 §8.2); runs once at startup, never on a read request. */
     public Activity activity(Instant dayStart) {
-        return named.queryForObject("""
-                        SELECT count(*) FILTER (WHERE event_type IN ('pageview', 'engagement', 'click')
-                                                  AND received_at >= :dayStart) AS today,
-                               max(received_at) AS newest
-                        FROM webanalytics.events
+        // Bounded by the received_at index: today's rows only, and max() as a backward index scan (no full scan).
+        Long today = named.queryForObject("""
+                        SELECT count(*) FROM webanalytics.events
+                        WHERE received_at >= :dayStart AND event_type IN ('pageview', 'engagement', 'click')
                         """,
-                new MapSqlParameterSource("dayStart", utc(dayStart)), (rs, i) -> {
-                    OffsetDateTime newest = rs.getObject("newest", OffsetDateTime.class);
-                    return new Activity(rs.getLong("today"), newest == null ? null : newest.toInstant());
-                });
+                new MapSqlParameterSource("dayStart", utc(dayStart)), Long.class);
+        OffsetDateTime newest = named.getJdbcTemplate().queryForObject(
+                "SELECT max(received_at) FROM webanalytics.events", OffsetDateTime.class);
+        return new Activity(today == null ? 0 : today, newest == null ? null : newest.toInstant());
     }
 
     /** Applies the batch's 2 s statement timeout (docs/100 §6.2) to the current transaction. */

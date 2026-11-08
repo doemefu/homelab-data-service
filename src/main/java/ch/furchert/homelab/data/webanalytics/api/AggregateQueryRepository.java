@@ -95,11 +95,18 @@ class AggregateQueryRepository {
         return byDay;
     }
 
+    /**
+     * Enquiry days are not rolled up, so they are not joined on {@code final}; a day whose rollup is still
+     * provisional is hidden (anti-join), while a day without any {@code rollup_day} row counts (rev 3.5, D1).
+     */
+    private static final String ENQUIRY_FINAL_FILTER =
+            " AND NOT EXISTS (SELECT 1 FROM webanalytics.rollup_day r WHERE r.day = e.day AND NOT r.final)";
+
     long enquiriesTotal(LocalDate from, LocalDate to) {
         Long total = named.queryForObject("""
-                        SELECT coalesce(sum(submissions), 0) FROM webanalytics.daily_enquiries
-                        WHERE day >= :from AND day <= :to
-                        """,
+                        SELECT coalesce(sum(e.submissions), 0) FROM webanalytics.daily_enquiries e
+                        WHERE e.day >= :from AND e.day <= :to
+                        """ + ENQUIRY_FINAL_FILTER,
                 new MapSqlParameterSource("from", from).addValue("to", to), Long.class);
         return total == null ? 0 : total;
     }
@@ -107,8 +114,9 @@ class AggregateQueryRepository {
     Map<LocalDate, Long> enquiriesByDay(LocalDate from, LocalDate to) {
         Map<LocalDate, Long> byDay = new TreeMap<>();
         named.query("""
-                        SELECT day, submissions FROM webanalytics.daily_enquiries WHERE day >= :from AND day <= :to
-                        """,
+                        SELECT e.day, e.submissions FROM webanalytics.daily_enquiries e
+                        WHERE e.day >= :from AND e.day <= :to
+                        """ + ENQUIRY_FINAL_FILTER,
                 new MapSqlParameterSource("from", from).addValue("to", to), rs -> {
                     byDay.put(rs.getObject("day", LocalDate.class), rs.getLong("submissions"));
                 });
@@ -229,6 +237,206 @@ class AggregateQueryRepository {
                 scope.params(),
                 (rs, i) -> new ConversionAgg(rs.getString("entry_path"), rs.getString("channel"),
                         rs.getString("first_channel"), rs.getLong("converting"), rs.getLong("conversions")));
+    }
+
+    // ---- WA-3b (docs/100 §7.8, §8.2, rev 3.5) ----
+
+    /** First final day rolled up with the current definition; {@code /funnels} and {@code /paths} start there. */
+    Optional<LocalDate> definitionFrom(int version) {
+        return Optional.ofNullable(named.queryForObject(
+                "SELECT min(day) FROM webanalytics.rollup_day WHERE final AND definition_version >= :version",
+                new MapSqlParameterSource("version", version), LocalDate.class));
+    }
+
+    record FunnelAgg(String funnelId, int step, long visits) {
+    }
+
+    List<FunnelAgg> funnels(Scope scope) {
+        return named.query("SELECT t.funnel_id, t.step, sum(t.visits) AS visits FROM webanalytics.daily_funnel t"
+                        + scope.join() + scope.where() + " GROUP BY t.funnel_id, t.step",
+                scope.params(), (rs, i) -> new FunnelAgg(rs.getString("funnel_id"), rs.getInt("step"),
+                        rs.getLong("visits")));
+    }
+
+    record TransitionAgg(String from, String to, long count) {
+    }
+
+    /** Transitions in scope; {@code fromPath}/{@code toPath} optionally fix one end (detail drilldown). */
+    List<TransitionAgg> transitions(Scope scope, String fromPath, String toPath) {
+        StringBuilder extra = new StringBuilder();
+        if (fromPath != null) {
+            extra.append(" AND t.from_path = :fromPath");
+        }
+        if (toPath != null) {
+            extra.append(" AND t.to_path = :toPath");
+        }
+        return named.query("SELECT t.from_path, t.to_path, sum(t.transitions) AS n"
+                        + " FROM webanalytics.daily_transition t" + scope.join() + scope.where() + extra
+                        + " GROUP BY t.from_path, t.to_path",
+                scope.params().addValue("fromPath", fromPath).addValue("toPath", toPath),
+                (rs, i) -> new TransitionAgg(rs.getString("from_path"), rs.getString("to_path"), rs.getLong("n")));
+    }
+
+    record KeyCounts(List<String> key, long visits, long convertingVisits) {
+    }
+
+    /** Unfiltered (the table has no locale/device keys): group paths. */
+    List<KeyCounts> groupPaths(LocalDate from, LocalDate to) {
+        return named.query("""
+                        SELECT t.path_key, sum(t.visits) AS visits, sum(t.converting_visits) AS converting
+                        FROM webanalytics.daily_group_path t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to GROUP BY t.path_key
+                        """, range(from, to),
+                (rs, i) -> new KeyCounts(List.of(rs.getString("path_key")), rs.getLong("visits"),
+                        rs.getLong("converting")));
+    }
+
+    List<KeyCounts> entryExits(LocalDate from, LocalDate to) {
+        return named.query("""
+                        SELECT t.entry_path, t.exit_path, sum(t.visits) AS visits
+                        FROM webanalytics.daily_entry_exit t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to GROUP BY t.entry_path, t.exit_path
+                        """, range(from, to),
+                (rs, i) -> new KeyCounts(List.of(rs.getString("entry_path"), rs.getString("exit_path")),
+                        rs.getLong("visits"), 0));
+    }
+
+    Map<String, Long> intentSeen(LocalDate from, LocalDate to) {
+        Map<String, Long> seen = new TreeMap<>();
+        named.query("""
+                        SELECT t.seen, sum(t.visits) AS visits FROM webanalytics.daily_intent_seen t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to GROUP BY t.seen
+                        """, range(from, to), rs -> {
+                    seen.put(rs.getString("seen"), rs.getLong("visits"));
+                });
+        return seen;
+    }
+
+    record DimensionAgg(String dimension, String value, long visits) {
+    }
+
+    List<DimensionAgg> dimensions(LocalDate from, LocalDate to) {
+        return named.query("""
+                        SELECT t.dimension, t.value, sum(t.visits) AS visits FROM webanalytics.daily_dimension t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to GROUP BY t.dimension, t.value
+                        """, range(from, to),
+                (rs, i) -> new DimensionAgg(rs.getString("dimension"), rs.getString("value"), rs.getLong("visits")));
+    }
+
+    /** Visits per value of {@code column} ({@code device_class} or {@code entry_locale}), unfiltered. */
+    Map<String, Long> visitsBy(String column, LocalDate from, LocalDate to) {
+        if (!"device_class".equals(column) && !"entry_locale".equals(column)) {
+            throw new IllegalArgumentException("unsupported column");
+        }
+        Map<String, Long> counts = new TreeMap<>();
+        named.query("SELECT t." + column + " AS value, sum(t.visits) AS visits FROM webanalytics.daily_visits t"
+                        + " JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final"
+                        + " WHERE t.day >= :from AND t.day <= :to GROUP BY t." + column,
+                range(from, to), rs -> {
+                    counts.put(rs.getString("value"), rs.getLong("visits"));
+                });
+        return counts;
+    }
+
+    Optional<Long> repeatOfferViewers28d(LocalDate day) {
+        return named.query("""
+                        SELECT t.repeat_offer_viewers_28d AS value FROM webanalytics.daily_visitors t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final WHERE t.day = :day
+                        """, new MapSqlParameterSource("day", day), (rs, i) -> rs.getLong("value"))
+                .stream().findFirst();
+    }
+
+    Optional<Long> monthlyRepeatOfferViewers(LocalDate month, LocalDate monthEnd) {
+        return named.query("""
+                        SELECT m.repeat_offer_viewers AS value FROM webanalytics.monthly_visitors m
+                        JOIN webanalytics.rollup_day r ON r.day = :monthEnd AND r.final
+                        WHERE m.month = :month
+                        """, new MapSqlParameterSource("month", month).addValue("monthEnd", monthEnd),
+                (rs, i) -> rs.getLong("value")).stream().findFirst();
+    }
+
+    /** Consented pageviews per day: Σ {@code daily_page.pageviews} (visit-start day, included visits). */
+    Map<LocalDate, Long> pageviewsByDay(LocalDate from, LocalDate to) {
+        Map<LocalDate, Long> byDay = new TreeMap<>();
+        named.query("""
+                        SELECT t.day, sum(t.pageviews) AS pageviews FROM webanalytics.daily_page t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to GROUP BY t.day
+                        """, range(from, to), rs -> {
+                    byDay.put(rs.getObject("day", LocalDate.class), rs.getLong("pageviews"));
+                });
+        return byDay;
+    }
+
+    record PageLocaleCount(String path, String locale, long count, boolean sampled) {
+    }
+
+    /** Consented pageviews per path and page locale. */
+    List<PageLocaleCount> pageviewsByPage(LocalDate from, LocalDate to) {
+        return named.query("""
+                        SELECT t.path, 'de' AS locale, sum(t.pageviews_de) AS n FROM webanalytics.daily_page t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to GROUP BY t.path
+                        UNION ALL
+                        SELECT t.path, 'en' AS locale, sum(t.pageviews_en) AS n FROM webanalytics.daily_page t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to GROUP BY t.path
+                        """, range(from, to),
+                (rs, i) -> new PageLocaleCount(rs.getString("path"), rs.getString("locale"), rs.getLong("n"), false));
+    }
+
+    record CfDay(long requests, boolean sampled) {
+    }
+
+    /** Cloudflare baseline per day (pre-launch days included; the caller bounds the window). */
+    Map<LocalDate, CfDay> cfByDay(LocalDate from, LocalDate to) {
+        Map<LocalDate, CfDay> byDay = new TreeMap<>();
+        named.query("""
+                        SELECT day, sum(requests) AS requests, bool_or(sampled) AS sampled
+                        FROM webanalytics.daily_cf_baseline WHERE day >= :from AND day <= :to GROUP BY day
+                        """, range(from, to), rs -> {
+                    byDay.put(rs.getObject("day", LocalDate.class),
+                            new CfDay(rs.getLong("requests"), rs.getBoolean("sampled")));
+                });
+        return byDay;
+    }
+
+    List<PageLocaleCount> cfByPage(LocalDate from, LocalDate to) {
+        return named.query("""
+                        SELECT path, locale, sum(requests) AS n, bool_or(sampled) AS sampled
+                        FROM webanalytics.daily_cf_baseline WHERE day >= :from AND day <= :to GROUP BY path, locale
+                        """, range(from, to),
+                (rs, i) -> new PageLocaleCount(rs.getString("path"), rs.getString("locale"), rs.getLong("n"),
+                        rs.getBoolean("sampled")));
+    }
+
+    long consentedSubmits(LocalDate from, LocalDate to) {
+        Long n = named.queryForObject("""
+                        SELECT coalesce(sum(t.consented_submits), 0) FROM webanalytics.daily_submits t
+                        JOIN webanalytics.rollup_day r ON r.day = t.day AND r.final
+                        WHERE t.day >= :from AND t.day <= :to
+                        """, range(from, to), Long.class);
+        return n == null ? 0 : n;
+    }
+
+    record StageReason(String stage, String reason, long events) {
+    }
+
+    /** {@code daily_ingest_stats} summed per stage and reason (day of receipt). */
+    List<StageReason> ingestStats(LocalDate from, LocalDate to) {
+        return named.query("""
+                        SELECT stage, reason, sum(events) AS events FROM webanalytics.daily_ingest_stats
+                        WHERE day >= :from AND day <= :to GROUP BY stage, reason
+                        """, range(from, to),
+                (rs, i) -> new StageReason(rs.getString("stage"), rs.getString("reason"), rs.getLong("events")));
+    }
+
+    private static MapSqlParameterSource range(LocalDate from, LocalDate to) {
+        return new MapSqlParameterSource("from", from).addValue("to", to);
     }
 
     private static VisitCounts visitCounts(ResultSet rs) throws SQLException {

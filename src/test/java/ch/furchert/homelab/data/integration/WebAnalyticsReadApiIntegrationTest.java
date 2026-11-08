@@ -4,6 +4,7 @@ import ch.furchert.homelab.data.AbstractIntegrationTest;
 import ch.furchert.homelab.data.support.AggregateRows;
 import ch.furchert.homelab.data.support.TestJwks;
 import ch.furchert.homelab.data.support.WebAnalyticsTables;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupPlanner;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,7 +59,7 @@ class WebAnalyticsReadApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.lastCompleteDay").value(nullValue()))
                 .andExpect(jsonPath("$.provisionalDay").value(nullValue()))
                 .andExpect(jsonPath("$.rawRetentionStart").value(nullValue()))
-                .andExpect(jsonPath("$.definitionVersion").value(1))
+                .andExpect(jsonPath("$.definitionVersion").value(RollupPlanner.DEFINITION_VERSION))
                 .andExpect(jsonPath("$.ingest.dailyCap").value(nullValue()))
                 .andExpect(jsonPath("$.ingest.capped").value(nullValue()));
         get("/api/webanalytics/pages").andExpect(jsonPath("$.items", hasSize(0)));
@@ -175,8 +176,8 @@ class WebAnalyticsReadApiIntegrationTest extends AbstractIntegrationTest {
 
         get("/api/webanalytics/pages/detail?path=/automation&from=2026-11-06&to=2026-11-07")
                 .andExpect(jsonPath("$.summary.pageviews").value(7))
-                .andExpect(jsonPath("$.previous").value(nullValue()))
-                .andExpect(jsonPath("$.next").value(nullValue()))
+                .andExpect(jsonPath("$.previous", hasSize(0))) // WA-3b: from daily_transition
+                .andExpect(jsonPath("$.next", hasSize(0)))
                 .andExpect(jsonPath("$.clicks", hasSize(2)))
                 .andExpect(jsonPath("$.sections.reached", hasSize(8)))
                 .andExpect(jsonPath("$.sections.reached[3].section").value("preise"))

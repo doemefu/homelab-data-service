@@ -58,6 +58,19 @@ public final class RawEventRows {
                 .update();
     }
 
+    /** An engagement snapshot with {@code formStarted = true} on {@code /contact}. */
+    public void formStart(UUID visitor, UUID pageviewId, int seq, Instant at) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.events (event_id, event_type, occurred_at, received_at, visitor_id,
+                            pageview_id, seq, path, locale, engaged_ms, scroll_max, fits, section_mask, form_started,
+                            source)
+                        VALUES (:id, 'engagement', :at, :at, :visitor, :pv, :seq, '/contact', 'de', 20000, 50, false,
+                            0, true, 'furchert-ch')
+                        """)
+                .param("id", UUID.randomUUID()).param("at", utc(at)).param("visitor", visitor).param("pv", pageviewId)
+                .param("seq", seq).update();
+    }
+
     public void click(UUID visitor, UUID pageviewId, int seq, Instant at, String path, String kind, String target) {
         jdbc.sql("""
                         INSERT INTO webanalytics.events (event_id, event_type, occurred_at, received_at, visitor_id,

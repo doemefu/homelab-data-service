@@ -3,6 +3,7 @@ package ch.furchert.homelab.data.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 
@@ -11,9 +12,18 @@ import java.util.List;
  *
  * @param api      write-API authorization settings
  * @param timezone day boundary of {@code daily_ingest_stats} and {@code daily_enquiries} (docs/100 §7.2)
+ * @param coverage consent-coverage settings of {@code /api/webanalytics/coverage} (docs/100 §8.2, rev 3.5)
  */
 @ConfigurationProperties("webanalytics")
-public record WebAnalyticsProperties(@DefaultValue Api api, @DefaultValue("Europe/Zurich") ZoneId timezone) {
+public record WebAnalyticsProperties(@DefaultValue Api api, @DefaultValue("Europe/Zurich") ZoneId timezone,
+                                     @DefaultValue Coverage coverage) {
+
+    /**
+     * @param goLiveDate first day of tracked traffic ({@code baselineFrom}); unset until WA-6, and while unset
+     *                   {@code /coverage} compares nothing
+     */
+    public record Coverage(LocalDate goLiveDate) {
+    }
 
     /**
      * @param writeClients token {@code sub} values allowed to call {@code POST /api/webanalytics/events}

@@ -3,6 +3,12 @@ package ch.furchert.homelab.data.webanalytics.rollup;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.ClickRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.ConversionRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.DayRows;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.DimensionRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.EntryExitRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.FunnelRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.GroupPathRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.IntentSeenRow;
+import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.TransitionRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.PageRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.SectionRow;
 import ch.furchert.homelab.data.webanalytics.rollup.RollupRows.SourceRow;
@@ -47,7 +53,113 @@ public final class DayAggregator {
      */
     public static DayRows aggregate(List<VisitFacts> included, List<Visit> excluded) {
         return new DayRows(visits(included, excluded), pages(included), sections(included), clicks(included),
-                sources(included), conversions(included));
+                sources(included), conversions(included), transitions(included), funnels(included),
+                groupPaths(included), entryExits(included), intentSeen(included), dimensions(included));
+    }
+
+    private record TransitionKey(String locale, String device, String from, String to) {
+    }
+
+    private static List<TransitionRow> transitions(List<VisitFacts> included) {
+        Map<TransitionKey, Integer> counts = new TreeMap<>(Comparator.comparing(TransitionKey::locale)
+                .thenComparing(TransitionKey::device).thenComparing(TransitionKey::from)
+                .thenComparing(TransitionKey::to));
+        for (VisitFacts f : included) {
+            Segment s = segment(f.visit());
+            for (String[] pair : Journeys.transitions(f.visit())) {
+                counts.merge(new TransitionKey(s.locale(), s.device(), pair[0], pair[1]), 1, Integer::sum);
+            }
+        }
+        List<TransitionRow> rows = new ArrayList<>();
+        counts.forEach((k, n) -> rows.add(new TransitionRow(k.locale(), k.device(), k.from(), k.to(), n)));
+        return rows;
+    }
+
+    private record FunnelKey(String funnel, int step, String locale, String device) {
+    }
+
+    private static List<FunnelRow> funnels(List<VisitFacts> included) {
+        Map<FunnelKey, Integer> counts = new TreeMap<>(Comparator.comparing(FunnelKey::funnel)
+                .thenComparingInt(FunnelKey::step).thenComparing(FunnelKey::locale).thenComparing(FunnelKey::device));
+        for (VisitFacts f : included) {
+            Segment s = segment(f.visit());
+            int offer = Journeys.offerSteps(f.visit());
+            for (int step = 1; step <= offer; step++) {
+                counts.merge(new FunnelKey(Journeys.OFFER, step, s.locale(), s.device()), 1, Integer::sum);
+            }
+            int contact = Journeys.contactFormSteps(f.visit());
+            for (int step = 1; step <= contact; step++) {
+                counts.merge(new FunnelKey(Journeys.CONTACT_FORM, step, s.locale(), s.device()), 1, Integer::sum);
+            }
+        }
+        List<FunnelRow> rows = new ArrayList<>();
+        counts.forEach((k, n) -> rows.add(new FunnelRow(k.funnel(), k.step(), k.locale(), k.device(), n)));
+        return rows;
+    }
+
+    private static List<GroupPathRow> groupPaths(List<VisitFacts> included) {
+        Map<String, int[]> counts = new TreeMap<>();
+        for (VisitFacts f : included) {
+            int[] c = counts.computeIfAbsent(Journeys.groupPathKey(f.visit()), k -> new int[2]);
+            c[0]++;
+            if (f.visit().converting()) {
+                c[1]++;
+            }
+        }
+        List<GroupPathRow> rows = new ArrayList<>();
+        counts.forEach((k, c) -> rows.add(new GroupPathRow(k, c[0], c[1])));
+        return rows;
+    }
+
+    private static List<EntryExitRow> entryExits(List<VisitFacts> included) {
+        Map<List<String>, Integer> counts = new TreeMap<>(Comparator.<List<String>, String>comparing(k -> k.get(0))
+                .thenComparing(k -> k.get(1)));
+        for (VisitFacts f : included) {
+            counts.merge(List.of(f.visit().entryPath(), f.visit().exitPath()), 1, Integer::sum);
+        }
+        List<EntryExitRow> rows = new ArrayList<>();
+        counts.forEach((k, n) -> rows.add(new EntryExitRow(k.get(0), k.get(1), n)));
+        return rows;
+    }
+
+    private static List<IntentSeenRow> intentSeen(List<VisitFacts> included) {
+        Map<Journeys.Seen, Integer> counts = new java.util.EnumMap<>(Journeys.Seen.class);
+        for (VisitFacts f : included) {
+            for (Journeys.Seen seen : Journeys.seenBeforeIntent(f.visit())) {
+                counts.merge(seen, 1, Integer::sum);
+            }
+        }
+        List<IntentSeenRow> rows = new ArrayList<>();
+        counts.forEach((seen, n) -> rows.add(new IntentSeenRow(seen.name().toLowerCase(java.util.Locale.ROOT), n)));
+        return rows;
+    }
+
+    /** {@code dimension} names of {@code daily_dimension} (docs/100 §7.8). */
+    public static final List<String> DIMENSIONS = List.of("country", "browser_family", "os_family", "viewport",
+            "visitor_type");
+
+    private static List<DimensionRow> dimensions(List<VisitFacts> included) {
+        Set<String> countries = topN(included.stream()
+                .map(f -> nullToEmpty(f.visit().firstPageview().country()))
+                .collect(Collectors.toMap(Function.identity(), x -> 1, Integer::sum)));
+        Map<List<String>, Integer> counts = new TreeMap<>(Comparator.<List<String>, Integer>comparing(
+                k -> DIMENSIONS.indexOf(k.get(0))).thenComparing(k -> k.get(1)));
+        for (VisitFacts f : included) {
+            RawEvent pv = f.visit().firstPageview();
+            String country = nullToEmpty(pv.country());
+            counts.merge(List.of("country", countries.contains(country) ? country : OTHER), 1, Integer::sum);
+            counts.merge(List.of("browser_family", nullToEmpty(pv.browserFamily())), 1, Integer::sum);
+            counts.merge(List.of("os_family", nullToEmpty(pv.osFamily())), 1, Integer::sum);
+            counts.merge(List.of("viewport", nullToEmpty(pv.viewport())), 1, Integer::sum);
+            counts.merge(List.of("visitor_type", f.isNew() ? "new" : "returning"), 1, Integer::sum);
+        }
+        List<DimensionRow> rows = new ArrayList<>();
+        counts.forEach((k, n) -> rows.add(new DimensionRow(k.get(0), k.get(1), n)));
+        return rows;
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private record Segment(String locale, String device) {

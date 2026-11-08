@@ -87,3 +87,5 @@ webanalytics:
     read-clients: [ furchert-ch ]
   # docs/100 §7.2, §11: day boundaries of daily_ingest_stats and daily_enquiries.
   timezone: Europe/Zurich
+  # docs/100 §8.2 (rev 3.5): coverage.go-live-date (YYYY-MM-DD) is the first day of tracked traffic (baselineFrom).
+  # Unset until WA-6; while unset /api/webanalytics/coverage compares nothing.

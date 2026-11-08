@@ -1,5 +1,6 @@
 package ch.furchert.homelab.data.support;
 
+import ch.furchert.homelab.data.webanalytics.rollup.RollupPlanner;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.time.Instant;
@@ -17,12 +18,16 @@ public final class AggregateRows {
     }
 
     public void rollupDay(LocalDate day, boolean fin) {
+        rollupDay(day, fin, RollupPlanner.DEFINITION_VERSION);
+    }
+
+    public void rollupDay(LocalDate day, boolean fin, int definitionVersion) {
         jdbc.sql("""
                         INSERT INTO webanalytics.rollup_day (day, raw_events, raw_pageviews, visits, orphan_visits,
                             definition_version, final, rolled_up_at)
-                        VALUES (:day, 0, 0, 0, 0, 1, :final, :at)
+                        VALUES (:day, 0, 0, 0, 0, :version, :final, :at)
                         """)
-                .param("day", day).param("final", fin)
+                .param("day", day).param("final", fin).param("version", definitionVersion)
                 .param("at", OffsetDateTime.ofInstant(Instant.now(), ZoneOffset.UTC)).update();
     }
 
@@ -112,6 +117,84 @@ public final class AggregateRows {
                         """)
                 .param("day", day).param("entry", entryPath).param("channel", channel).param("first", firstChannel)
                 .param("visits", visits).update();
+    }
+
+    public void funnel(LocalDate day, String funnelId, int step, int visits) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_funnel (day, funnel_id, step, entry_locale, device_class, visits)
+                        VALUES (:day, :funnel, :step, 'de', 'desktop', :visits)
+                        """)
+                .param("day", day).param("funnel", funnelId).param("step", step).param("visits", visits).update();
+    }
+
+    public void transition(LocalDate day, String locale, String from, String to, int transitions) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_transition (day, entry_locale, device_class, from_path, to_path,
+                            transitions)
+                        VALUES (:day, :locale, 'desktop', :from, :to, :n)
+                        """)
+                .param("day", day).param("locale", locale).param("from", from).param("to", to)
+                .param("n", transitions).update();
+    }
+
+    public void groupPath(LocalDate day, String key, int visits, int converting) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_group_path (day, path_key, visits, converting_visits)
+                        VALUES (:day, :key, :visits, :converting)
+                        """)
+                .param("day", day).param("key", key).param("visits", visits).param("converting", converting).update();
+    }
+
+    public void entryExit(LocalDate day, String entry, String exit, int visits) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_entry_exit (day, entry_path, exit_path, visits)
+                        VALUES (:day, :entry, :exit, :visits)
+                        """)
+                .param("day", day).param("entry", entry).param("exit", exit).param("visits", visits).update();
+    }
+
+    public void intentSeen(LocalDate day, String seen, int visits) {
+        jdbc.sql("INSERT INTO webanalytics.daily_intent_seen (day, seen, visits) VALUES (:day, :seen, :visits)")
+                .param("day", day).param("seen", seen).param("visits", visits).update();
+    }
+
+    public void dimension(LocalDate day, String dimension, String value, int visits) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_dimension (day, dimension, value, visits)
+                        VALUES (:day, :dimension, :value, :visits)
+                        """)
+                .param("day", day).param("dimension", dimension).param("value", value).param("visits", visits).update();
+    }
+
+    public void cfBaseline(LocalDate day, String path, String locale, long requests, boolean sampled) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_cf_baseline (day, path, locale, requests, sampled)
+                        VALUES (:day, :path, :locale, :requests, :sampled)
+                        """)
+                .param("day", day).param("path", path).param("locale", locale).param("requests", requests)
+                .param("sampled", sampled).update();
+    }
+
+    public void submits(LocalDate day, int consented) {
+        jdbc.sql("INSERT INTO webanalytics.daily_submits (day, consented_submits) VALUES (:day, :n)")
+                .param("day", day).param("n", consented).update();
+    }
+
+    public void ingestStats(LocalDate day, String stage, String reason, long events) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_ingest_stats (day, stage, reason, events)
+                        VALUES (:day, :stage, :reason, :events)
+                        """)
+                .param("day", day).param("stage", stage).param("reason", reason).param("events", events).update();
+    }
+
+    public void repeatOfferViewers(LocalDate day, int repeat28) {
+        jdbc.sql("""
+                        INSERT INTO webanalytics.daily_visitors (day, visitors, new_visitors, returning_visitors,
+                            visitors_7d, visitors_28d, repeat_offer_viewers_28d)
+                        VALUES (:day, 0, 0, 0, 0, 0, :repeat)
+                        """)
+                .param("day", day).param("repeat", repeat28).update();
     }
 
     public void enquiries(LocalDate day, int submissions) {

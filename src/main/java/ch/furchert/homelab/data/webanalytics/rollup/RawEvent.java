@@ -3,7 +3,7 @@ package ch.furchert.homelab.data.webanalytics.rollup;
 import java.time.Instant;
 import java.util.UUID;
 
-/** One {@code webanalytics.events} row as the rollup needs it (WA-3a has no use for country, browser, OS, viewport). */
+/** One {@code webanalytics.events} row as the rollup needs it. */
 public record RawEvent(
         UUID eventId,
         String type,
@@ -26,7 +26,11 @@ public record RawEvent(
         Boolean formStarted,
         String clickKind,
         String clickTarget,
-        String clickArea) {
+        String clickArea,
+        String country,
+        String browserFamily,
+        String osFamily,
+        String viewport) {
 
     public static final String PAGEVIEW = "pageview";
     public static final String ENGAGEMENT = "engagement";

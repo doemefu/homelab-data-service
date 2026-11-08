@@ -22,7 +22,9 @@ class NoRawTableReadsTest {
 
     static final Path API = Path.of("src/main/java/ch/furchert/homelab/data/webanalytics/api");
     static final Set<String> ALLOWED = Set.of("rollup_day", "daily_visits", "daily_visitors", "monthly_visitors",
-            "daily_page", "daily_section", "daily_click", "daily_source", "daily_conversion", "daily_enquiries");
+            "daily_page", "daily_section", "daily_click", "daily_source", "daily_conversion", "daily_enquiries",
+            "daily_transition", "daily_funnel", "daily_group_path", "daily_entry_exit", "daily_intent_seen",
+            "daily_dimension", "daily_cf_baseline", "daily_submits", "daily_ingest_stats");
     /** A schema-qualified table name in code (not a Java package such as {@code ...data.webanalytics.api}). */
     static final Pattern TABLE = Pattern.compile("(?<![\\w.])webanalytics\\.([a-z_]+)");
     static final Pattern COMMENTS = Pattern.compile("/\\*.*?\\*/|//[^\\n]*", Pattern.DOTALL);
@@ -38,6 +40,7 @@ class NoRawTableReadsTest {
         for (Path source : sources) {
             String code = COMMENTS.matcher(Files.readString(source)).replaceAll("");
             assertThat(code).as(source.toString()).doesNotContainPattern("(?i)\\bFROM\\s+events\\b");
+            assertThat(code).as(source + " must not read netmon").doesNotContainPattern("(?<![\\w.])netmon\\.");
             Matcher m = TABLE.matcher(code);
             while (m.find()) {
                 references++;

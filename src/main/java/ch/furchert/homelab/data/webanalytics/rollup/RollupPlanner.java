@@ -21,7 +21,8 @@ import java.util.stream.Collectors;
  */
 public final class RollupPlanner {
 
-    public static final int DEFINITION_VERSION = 1;
+    /** 2 since WA-3b (journey, audience, baseline and submit tables); older days keep 1 (docs/100 §8.5, rev 3.5). */
+    public static final int DEFINITION_VERSION = 2;
     static final int MAX_DAYS_PER_CATEGORY = 31;
     static final int VERSION_HORIZON_DAYS = 30;
 

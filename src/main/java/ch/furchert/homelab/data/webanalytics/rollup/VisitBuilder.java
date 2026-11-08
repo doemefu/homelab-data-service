@@ -81,7 +81,7 @@ public final class VisitBuilder {
         draft.sort(ORDER);
         Map<UUID, List<RawEvent>> snapshots = new HashMap<>();
         List<RawEvent> clicks = new ArrayList<>();
-        int goals = 0;
+        List<Instant> goalTimes = new ArrayList<>();
         int pageviewEvents = 0;
         RawEvent firstPageview = null;
         List<List<RawEvent>> slotPageviews = new ArrayList<>();
@@ -106,12 +106,12 @@ public final class VisitBuilder {
             } else if (e.isClick()) {
                 clicks.add(e);
             } else if (e.isGoal()) {
-                goals++;
+                goalTimes.add(e.occurredAt());
             }
         }
         List<PageSlot> slots = slotPageviews.stream().map(pvs -> toSlot(pvs, snapshots)).toList();
         return new Visit(draft.getFirst().visitorId(), draft.getFirst().occurredAt(), firstPageview, slots,
-                List.copyOf(clicks), goals, pageviewEvents, draft.size());
+                List.copyOf(clicks), List.copyOf(goalTimes), pageviewEvents, draft.size());
     }
 
     private static PageSlot toSlot(List<RawEvent> pageviews, Map<UUID, List<RawEvent>> snapshots) {
@@ -136,7 +136,7 @@ public final class VisitBuilder {
             engaged = maxEngagedPerPageview.values().stream().mapToLong(Integer::longValue).sum();
         }
         List<UUID> ids = pageviews.stream().map(RawEvent::pageviewId).toList();
-        return new PageSlot(pageviews.getFirst().path(), pageviews.getFirst().locale(), ids, engaged, scroll, mask,
-                anySnapshot && allFit, formStarted);
+        return new PageSlot(pageviews.getFirst().occurredAt(), pageviews.getFirst().path(),
+                pageviews.getFirst().locale(), ids, engaged, scroll, mask, anySnapshot && allFit, formStarted);
     }
 }

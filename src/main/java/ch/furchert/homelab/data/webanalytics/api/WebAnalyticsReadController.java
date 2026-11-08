@@ -44,6 +44,8 @@ public class WebAnalyticsReadController {
     static final String OTHER = DayAggregator.OTHER;
     static final String AUTOMATION = "/automation";
     static final Set<String> CLICK_KINDS = Set.of("cta", "link", "faq", "lang", "nav", "outbound", "mailto", "tel");
+    /** Default {@code limit} of the detail drilldown's previous/next lists (docs/100 §8.1, rev 3.5). */
+    static final int DETAIL_LIMIT_DEFAULT = 5;
 
     private final AggregateQueryRepository queries;
 
@@ -110,17 +112,20 @@ public class WebAnalyticsReadController {
                                            @RequestParam(required = false) String to,
                                            @RequestParam(required = false) String compare,
                                            @RequestParam(required = false) String locale,
-                                           @RequestParam(required = false) String device) {
+                                           @RequestParam(required = false) String device,
+                                           @RequestParam(required = false) String limit) {
         if (path == null || !EventValidator.isCanonicalPath(path)) {
             throw new NetmonApiException(HttpStatus.BAD_REQUEST, ProblemCode.INVALID_PARAMETER,
                     "path must be a locale-free canonical path");
         }
+        int max = ReadParams.limit(limit, DETAIL_LIMIT_DEFAULT);
         ReadParams.Query q = parse(from, to, compare, locale, device);
         boolean automation = AUTOMATION.equals(path);
         ReadParams.Range r = q.range();
         if (r == null) {
             return new ReadDtos.PageDetailResponse(ReadParams.rangeDto(q), q.filters(), pageItem(emptyPage(path)),
-                    null, null, List.of(), automation ? emptySections() : null, automation ? List.of() : null,
+                    List.of(), List.of(), List.of(), automation ? emptySections() : null,
+                    automation ? List.of() : null,
                     List.of());
         }
         Scope scope = scope(q, r.from(), r.to());
@@ -160,7 +165,10 @@ public class WebAnalyticsReadController {
             AggregateQueryRepository.PageDay pd = byDay.get(d);
             daily.add(new ReadDtos.PageDaily(d, pd == null ? 0 : pd.pageviews(), pd == null ? 0 : pd.visitsViewed()));
         }
-        return new ReadDtos.PageDetailResponse(ReadParams.rangeDto(q), q.filters(), pageItem(summary), null, null,
+        // WA-3b: previous/next pages from daily_transition, incl. (entrance)/(exit), top `limit` + (other) (rev 3.5).
+        List<ReadDtos.PathCount> previous = pathCounts(queries.transitions(scope, null, path), true, max);
+        List<ReadDtos.PathCount> next = pathCounts(queries.transitions(scope, path, null), false, max);
+        return new ReadDtos.PageDetailResponse(ReadParams.rangeDto(q), q.filters(), pageItem(summary), previous, next,
                 clicks, sections, faqOpens, daily);
     }
 
@@ -185,23 +193,20 @@ public class WebAnalyticsReadController {
         Scope scope = scope(q, q.range().from(), q.range().to());
         Map<String, Long> pageVisits = queries.pages(scope, null).stream()
                 .collect(Collectors.toMap(PageAgg::path, PageAgg::visitsViewed));
-        List<ClickAgg> sorted = queries.clicks(scope, null, kindFilter).stream().sorted(clickOrder()).toList();
-        List<ReadDtos.ClickItem> items = new ArrayList<>();
-        long[] rest = new long[3];
-        for (int i = 0; i < sorted.size(); i++) {
-            ClickAgg c = sorted.get(i);
-            if (i < max) {
-                items.add(new ReadDtos.ClickItem(c.kind(), nullIfEmpty(c.target()), c.path(), c.area(), c.clicks(),
-                        c.visits(), c.convertingVisits(), pageVisits.getOrDefault(c.path(), 0L)));
-            } else {
-                rest[0] += c.clicks();
-                rest[1] += c.visits();
-                rest[2] += c.convertingVisits();
-            }
-        }
-        if (sorted.size() > max) {
-            items.add(new ReadDtos.ClickItem(OTHER, null, OTHER, null, rest[0], rest[1], rest[2], null));
-        }
+        // Remainder: one item {kind "(other)", target null, path "(other)", area null, pageVisits null}, merged with
+        // the stored outbound "(other)" rows; a nav "(other)" target stays its own item (rev 3.5).
+        List<ClickAgg> limited = limit(queries.clicks(scope, null, kindFilter), max, clickOrder(),
+                c -> "outbound".equals(c.kind()) && OTHER.equals(c.target()),
+                c -> new ClickAgg(OTHER, OTHER, OTHER, OTHER, c.clicks(), c.visits(), c.convertingVisits()),
+                (a, b) -> new ClickAgg(OTHER, OTHER, OTHER, OTHER, a.clicks() + b.clicks(), a.visits() + b.visits(),
+                        a.convertingVisits() + b.convertingVisits()));
+        List<ReadDtos.ClickItem> items = limited.stream()
+                .map(c -> OTHER.equals(c.area())
+                        ? new ReadDtos.ClickItem(OTHER, null, OTHER, null, c.clicks(), c.visits(),
+                        c.convertingVisits(), null)
+                        : new ReadDtos.ClickItem(c.kind(), nullIfEmpty(c.target()), c.path(), c.area(), c.clicks(),
+                        c.visits(), c.convertingVisits(), pageVisits.getOrDefault(c.path(), 0L)))
+                .toList();
         return new ReadDtos.ClicksResponse(ReadParams.rangeDto(q), q.filters(), items);
     }
 
@@ -399,6 +404,20 @@ public class WebAnalyticsReadController {
                 .sorted(Comparator.comparingLong(ReadDtos.ChannelConversions::convertingVisits).reversed()
                         .thenComparing(c -> c.channel() == null ? "" : c.channel()))
                 .toList();
+    }
+
+    /** Previous ({@code fromPath} side) or next ({@code toPath} side) pages of a transition list. */
+    private static List<ReadDtos.PathCount> pathCounts(List<AggregateQueryRepository.TransitionAgg> transitions,
+                                                       boolean previous, int max) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        transitions.forEach(t -> counts.merge(previous ? t.from() : t.to(), t.count(), Long::sum));
+        List<Map.Entry<String, Long>> entries = new ArrayList<>(counts.entrySet());
+        return limit(entries, max,
+                        Map.Entry.<String, Long>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()),
+                        e -> false,
+                        e -> Map.entry(OTHER, e.getValue()),
+                        (a, b) -> Map.entry(OTHER, a.getValue() + b.getValue()))
+                .stream().map(e -> new ReadDtos.PathCount(e.getKey(), e.getValue())).toList();
     }
 
     private static String nullIfEmpty(String value) {

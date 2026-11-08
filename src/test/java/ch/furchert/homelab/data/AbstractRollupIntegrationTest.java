@@ -1,5 +1,6 @@
 package ch.furchert.homelab.data;
 
+import ch.furchert.homelab.data.config.RetentionProperties;
 import ch.furchert.homelab.data.config.WebAnalyticsProperties;
 import ch.furchert.homelab.data.netmon.collector.CollectorRunner;
 import ch.furchert.homelab.data.netmon.collector.CollectorStateRepository;
@@ -37,6 +38,8 @@ public abstract class AbstractRollupIntegrationTest extends AbstractIntegrationT
     protected PlatformTransactionManager transactionManager;
     @Autowired
     protected WebAnalyticsProperties properties;
+    @Autowired
+    protected RetentionProperties retention;
 
     protected RawEventRows rows;
 
@@ -49,7 +52,8 @@ public abstract class AbstractRollupIntegrationTest extends AbstractIntegrationT
     }
 
     protected WebAnalyticsRollupCollector collector(MutableClock clock) {
-        return new WebAnalyticsRollupCollector(rollupRepository, state, runner, transactionManager, clock, properties);
+        return new WebAnalyticsRollupCollector(rollupRepository, state, runner, transactionManager, clock, properties,
+                retention);
     }
 
     protected static MutableClock clockAt(Instant instant) {

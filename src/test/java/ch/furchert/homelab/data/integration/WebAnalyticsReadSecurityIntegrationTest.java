@@ -29,12 +29,27 @@ class WebAnalyticsReadSecurityIntegrationTest extends AbstractIntegrationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"/api/webanalytics/status", "/api/webanalytics/overview", "/api/webanalytics/pages",
-            "/api/webanalytics/pages/detail?path=/automation", "/api/webanalytics/clicks", "/api/webanalytics/sources"})
+            "/api/webanalytics/pages/detail?path=/automation", "/api/webanalytics/clicks", "/api/webanalytics/sources",
+            "/api/webanalytics/funnels", "/api/webanalytics/paths", "/api/webanalytics/audience",
+            "/api/webanalytics/coverage"})
     void readTokenIsAcceptedWithNoStore(String path) throws Exception {
         mockMvc.perform(get(path).header("Authorization", "Bearer " + READ_TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(header().stringValues("Cache-Control", "no-store"))
                 .andExpect(header().stringValues("Pragma", "no-cache"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/webanalytics/funnels", "/api/webanalytics/paths", "/api/webanalytics/audience",
+            "/api/webanalytics/coverage"})
+    void wa3bPathsRejectOtherTokensAndWriteMethods(String path) throws Exception {
+        assertForbidden(mockMvc.perform(get(path).header("Authorization", "Bearer " + WebAnalyticsFixtures.writeToken())));
+        assertForbidden(mockMvc.perform(get(path).header("Authorization", "Bearer "
+                + TestJwks.token(c -> c.claim("role", "ADMIN").claim("scope", List.of("analytics:read"))))));
+        assertForbidden(mockMvc.perform(get(path).header("Authorization", "Bearer "
+                + TestJwks.token(c -> c.subject("grafana").claim("scope", List.of("analytics:read"))))));
+        mockMvc.perform(post(path).header("Authorization", "Bearer " + READ_TOKEN))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     @Test
@@ -60,7 +75,7 @@ class WebAnalyticsReadSecurityIntegrationTest extends AbstractIntegrationTest {
     @Test
     void anonymousIs401AndUnknownPathIs403() throws Exception {
         mockMvc.perform(get("/api/webanalytics/overview")).andExpect(status().isUnauthorized());
-        mockMvc.perform(get("/api/webanalytics/funnels").header("Authorization", "Bearer " + READ_TOKEN))
+        mockMvc.perform(get("/api/webanalytics/visitors").header("Authorization", "Bearer " + READ_TOKEN))
                 .andExpect(status().isForbidden());
     }
 

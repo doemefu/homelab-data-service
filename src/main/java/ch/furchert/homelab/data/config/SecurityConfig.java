@@ -36,10 +36,11 @@ public class SecurityConfig {
     static final String ANALYTICS_WRITE = "SCOPE_analytics:write";
     static final String WEBANALYTICS_EVENTS = "/api/webanalytics/events";
     static final String ANALYTICS_READ = "SCOPE_analytics:read";
-    /** The WA-3a read endpoints (docs/100 §8.2); WA-3b adds its own. */
+    /** The read endpoints of WA-3a and WA-3b (docs/100 §8.2). */
     static final String[] WEBANALYTICS_READ_PATHS = {"/api/webanalytics/status", "/api/webanalytics/overview",
             "/api/webanalytics/pages", "/api/webanalytics/pages/detail", "/api/webanalytics/clicks",
-            "/api/webanalytics/sources"};
+            "/api/webanalytics/sources", "/api/webanalytics/funnels", "/api/webanalytics/paths",
+            "/api/webanalytics/audience", "/api/webanalytics/coverage"};
 
     /**
      * Chain 1: the netmon read API (docs/060 §7.1, §7.5). Stateless JWT resource server; v1 grants

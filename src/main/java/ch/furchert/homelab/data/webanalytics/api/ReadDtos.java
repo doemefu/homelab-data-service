@@ -131,4 +131,73 @@ final class ReadDtos {
     record SourcesResponse(Range range, Filters filters, List<ChannelItem> channels, List<ReferrerItem> referrers,
                            List<CampaignItem> campaigns, Converters converters) {
     }
+
+    // /funnels (WA-3b)
+
+    record FunnelStep(int index, String key, long visits) {
+    }
+
+    record Funnel(String id, List<FunnelStep> steps, List<FunnelStep> previous) {
+    }
+
+    record FunnelsResponse(Range range, Filters filters, int definitionVersion, LocalDate definitionFrom,
+                           List<Funnel> funnels) {
+    }
+
+    // /paths (WA-3b)
+
+    record GroupPath(String path, long visits, long convertingVisits) {
+    }
+
+    record EntryExit(String entry, String exit, long visits) {
+    }
+
+    record SeenItem(String seen, long visits) {
+    }
+
+    record SeenBeforeContacting(long intentVisits, List<SeenItem> items) {
+    }
+
+    record Transition(String fromPath, String toPath, long count) {
+    }
+
+    record PathsResponse(Range range, Filters filters, LocalDate definitionFrom, List<GroupPath> groupPaths,
+                         List<EntryExit> entryExit, SeenBeforeContacting seenBeforeContacting,
+                         List<Transition> transitions) {
+    }
+
+    // /audience (WA-3b)
+
+    record NewVsReturning(long newVisits, long returningVisits) {
+    }
+
+    record ValueCount(String value, long visits) {
+    }
+
+    record Dimensions(List<ValueCount> country, List<ValueCount> browserFamily, List<ValueCount> osFamily,
+                      List<ValueCount> viewport, List<ValueCount> visitorType) {
+    }
+
+    record AudienceResponse(Range range, Filters filters, NewVsReturning newVsReturning, ValueBasis repeatOfferViewers,
+                            List<ValueCount> deviceClass, List<ValueCount> entryLocale, Dimensions dimensions) {
+    }
+
+    // /coverage (WA-3b)
+
+    record CoverageDay(LocalDate day, long consentedPageviews, long cloudflareRequests, boolean sampled) {
+    }
+
+    record CoveragePage(String path, String locale, long consentedPageviews, long cloudflareRequests,
+                        boolean sampled) {
+    }
+
+    record Enquiries(long consentedSubmits, long totalSubmits) {
+    }
+
+    record DataQuality(Map<String, Long> edge, Map<String, Long> secondLine, long duplicates, Long cappedDays) {
+    }
+
+    record CoverageResponse(Range range, Filters filters, LocalDate baselineFrom, List<CoverageDay> daily,
+                            List<CoveragePage> byPage, Enquiries enquiries, DataQuality dataQuality) {
+    }
 }

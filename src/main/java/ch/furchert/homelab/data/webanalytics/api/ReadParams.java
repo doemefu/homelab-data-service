@@ -102,8 +102,13 @@ final class ReadParams {
     }
 
     static int limit(String value) {
+        return limit(value, LIMIT_DEFAULT);
+    }
+
+    /** {@code limit} with an endpoint-specific default (the detail drilldown uses 5, docs/100 §8.1, rev 3.5). */
+    static int limit(String value, int defaultValue) {
         if (value == null || value.isBlank()) {
-            return LIMIT_DEFAULT;
+            return defaultValue;
         }
         try {
             int limit = Integer.parseInt(value.trim());
@@ -115,6 +120,34 @@ final class ReadParams {
         }
         throw new NetmonApiException(HttpStatus.BAD_REQUEST, ProblemCode.INVALID_PARAMETER,
                 "limit must be an integer from 1 to " + LIMIT_MAX);
+    }
+
+    /**
+     * Clamps the range to {@code definitionFrom}, the first final day of the current rollup definition
+     * ({@code /funnels}, {@code /paths}; docs/100 §8.2, rev 3.5): {@code from} and the previous range start no earlier;
+     * a previous range that ends before it is dropped; no such day yet, or nothing left, gives the empty range.
+     */
+    static Query clampToDefinition(Query query, LocalDate definitionFrom) {
+        Range r = query.range();
+        if (r == null) {
+            return query;
+        }
+        if (definitionFrom == null || r.to().isBefore(definitionFrom)) {
+            return new Query(null, query.lastCompleteDay(), query.locale(), query.device(), query.filters());
+        }
+        if (!r.from().isBefore(definitionFrom) && (!r.hasPrevious() || !r.previousFrom().isBefore(definitionFrom))) {
+            return query;
+        }
+        LocalDate from = r.from().isBefore(definitionFrom) ? definitionFrom : r.from();
+        LocalDate previousFrom = null;
+        LocalDate previousTo = null;
+        if (r.hasPrevious() && !r.previousTo().isBefore(definitionFrom)) {
+            previousFrom = r.previousFrom().isBefore(definitionFrom) ? definitionFrom : r.previousFrom();
+            previousTo = r.previousTo();
+        }
+        boolean monthBasis = r.monthBasis() && from.equals(r.from());
+        return new Query(new Range(from, r.to(), previousFrom, previousTo, monthBasis), query.lastCompleteDay(),
+                query.locale(), query.device(), query.filters());
     }
 
     static ReadDtos.Range rangeDto(Query query) {

@@ -65,11 +65,24 @@ class WebAnalyticsReadLatencyIntegrationTest extends AbstractIntegrationTest {
             rows.source(d, "campaign", "", "linkedin", 2);
             rows.conversion(d, "/automation", "search", "social", 1);
             rows.enquiries(d, 1);
+            rows.funnel(d, "offer", 1, 10);
+            rows.funnel(d, "offer", 2, 4);
+            rows.transition(d, "de", "(entrance)", "/", 5);
+            rows.transition(d, "de", "/", "/automation", 3);
+            rows.groupPath(d, "home > offer > (exit)", 3, 1);
+            rows.entryExit(d, "/", "/automation", 3);
+            rows.intentSeen(d, "prices", 1);
+            rows.dimension(d, "country", "CH", 8);
+            rows.cfBaseline(d, "/", "de", 40, false);
+            rows.submits(d, 1);
+            rows.ingestStats(d, "accepted", "", 20);
         }
         String range = "from=" + first + "&to=" + LAST;
         for (String url : List.of("/api/webanalytics/status", "/api/webanalytics/overview?" + range,
                 "/api/webanalytics/pages?" + range, "/api/webanalytics/pages/detail?path=/automation&" + range,
-                "/api/webanalytics/clicks?" + range, "/api/webanalytics/sources?" + range)) {
+                "/api/webanalytics/clicks?" + range, "/api/webanalytics/sources?" + range,
+                "/api/webanalytics/funnels?" + range, "/api/webanalytics/paths?" + range,
+                "/api/webanalytics/audience?" + range, "/api/webanalytics/coverage?" + range)) {
             long start = System.nanoTime();
             mockMvc.perform(get(url).header("Authorization", "Bearer " + TOKEN)).andExpect(status().isOk());
             Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
