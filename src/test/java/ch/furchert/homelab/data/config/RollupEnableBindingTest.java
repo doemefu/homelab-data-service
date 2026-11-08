@@ -18,8 +18,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Gate N1 bindings (docs/100 §7.5; homelab#350 plan review): the shipped {@code application.yaml} disables the
- * rollup explicitly (a collector without an entry would be enabled); {@code SPRING_APPLICATION_JSON} enables it, and
- * so does {@code NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED}, but only because the YAML entry exists.
+ * rollup explicitly (a collector without an entry would be enabled); the documented enable path
+ * {@code NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED=true} binds only because that YAML entry exists; the
+ * alternative {@code SPRING_APPLICATION_JSON} enables it as well.
  */
 class RollupEnableBindingTest {
 

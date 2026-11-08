@@ -407,7 +407,7 @@ No other service reads or writes this database.
 | `netmon.scheduling.enabled` | `true` | Turns every `@Scheduled` trigger off (the test suite sets `false`) |
 | `webanalytics.api.write-clients` | `[furchert-ch]` | Token `sub` values allowed on `POST /api/webanalytics/events`; empty admits nobody |
 | `webanalytics.api.read-clients` | `[furchert-ch]` | Token `sub` values allowed on `GET /api/webanalytics/*`; empty admits nobody |
-| `netmon.collectors.webanalytics-rollup.enabled` | `false` (set explicitly in `application.yaml`) | Rollup kill switch; enabled only after gate N1 (DEPLOYMENT.md "WA-3a rollout") |
+| `netmon.collectors.webanalytics-rollup.enabled` | `false` (set explicitly in `application.yaml`) | Rollup kill switch; enabled only after gate N1 with the env var `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED=true`, which binds only because the YAML entry exists (DEPLOYMENT.md "WA-3a rollout") |
 | `webanalytics.timezone` | `Europe/Zurich` | Day boundary of `daily_ingest_stats` and `daily_enquiries` |
 
 Kubernetes Secret `data-service-secrets` (ns `apps`, created by the `homelab` repo's playbook 59): keys `db-username`, `db-password`; NM-1 reads `cloudflare-api-token` → `CLOUDFLARE_API_TOKEN`, `cloudflare-zone-id` → `CLOUDFLARE_ZONE_ID` (both added by doemefu/homelab#116) and `abuseipdb-api-key` → `ABUSEIPDB_API_KEY` (optional; set via playbook 59, doemefu/homelab#146; the reputation collector is disabled while the key is absent). All three `secretKeyRef`s are `optional: true`. NM-4 adds `auth-client-secret` (§9).

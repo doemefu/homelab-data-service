@@ -53,8 +53,9 @@ netmon:
     allowed-clients: [ furchert-ch ]
   collectors:
     # docs/100 §7.5 gate N1: ships disabled. A collector without an entry is enabled, so this line is required.
-    # Enable only after doemefu/homelab#350 is merged and the owner ran playbook 41_monitoring.yml, via
-    # SPRING_APPLICATION_JSON in k8s/deployment.yaml (a plain env var cannot address the dashed key).
+    # Enable only after doemefu/homelab#350 is merged and the owner ran playbook 41_monitoring.yml, with
+    # NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED=true in k8s/deployment.yaml. That env var binds only because this
+    # entry exists (RollupEnableBindingTest); keep it.
     webanalytics-rollup:
       enabled: false
   # docs/060 §4.2, §9. Token and zone id come from Secret data-service-secrets; blank = the
