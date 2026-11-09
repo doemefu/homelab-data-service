@@ -18,7 +18,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -75,69 +74,82 @@ class GoLiveDateBindingTest {
 
     @Test
     void theManifestCheckAcceptsAQuotedIsoDateAndRejectsEverythingElse() {
-        assertThat(goLiveEnvValue(manifest("value: \"2026-11-20\""))).isEqualTo("2026-11-20");
-        assertThat(goLiveEnvValue(manifest(null))).isNull();
+        String quoted = env("WEBANALYTICS_COVERAGE_GOLIVEDATE", "value: \"2026-11-20\"");
+        assertThat(goLiveEnvValue(deployment("data-service", container("data-service", quoted)))).isEqualTo("2026-11-20");
+        assertThat(goLiveEnvValue(deployment("data-service", container("data-service", "")))).isNull();
         // Unquoted, YAML turns the date into a timestamp: Kubernetes would reject it, so must the check.
-        assertThatThrownBy(() -> goLiveEnvValue(manifest("value: 2026-11-20")))
+        assertThatThrownBy(() -> goLiveEnvValue(deployment("data-service", container("data-service",
+                env("WEBANALYTICS_COVERAGE_GOLIVEDATE", "value: 2026-11-20"))))).isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> goLiveEnvValue(deployment("data-service", container("data-service",
+                env("WEBANALYTICS_COVERAGE_GOLIVEDATE", "valueFrom: {configMapKeyRef: {name: x, key: y}}")))))
                 .isInstanceOf(AssertionError.class);
-        assertThatThrownBy(() -> goLiveEnvValue(manifest("valueFrom: {configMapKeyRef: {name: x, key: y}}")))
+        // Another coverage variable, or the go-live entry twice (the last one would win silently).
+        assertThatThrownBy(() -> goLiveEnvValue(deployment("data-service", container("data-service",
+                quoted + env("WEBANALYTICS_COVERAGE_GO_LIVE_DATE", "value: \"2026-11-20\"")))))
                 .isInstanceOf(AssertionError.class);
-        assertThatThrownBy(() -> goLiveEnvValue(manifest("value: \"2026-11-20\"")
-                .replace("- name: OTHER", "- name: WEBANALYTICS_COVERAGE_GO_LIVE_DATE")))
+        assertThatThrownBy(() -> goLiveEnvValue(deployment("data-service", container("data-service", quoted + quoted))))
                 .isInstanceOf(AssertionError.class);
+        // On another container of the data-service Deployment it would be skipped instead of rejected.
+        assertThatThrownBy(() -> goLiveEnvValue(deployment("data-service",
+                container("data-service", "") + container("sidecar", quoted)))).isInstanceOf(AssertionError.class);
+        // The data-service Deployment must have its data-service container; other Deployments are ignored.
+        assertThatThrownBy(() -> goLiveEnvValue(deployment("data-service", container("web", ""))))
+                .isInstanceOf(AssertionError.class);
+        assertThat(goLiveEnvValue(deployment("other", container("web", quoted)) + "---\n"
+                + deployment("data-service", container("data-service", "")))).isNull();
     }
 
-    /** A minimal Deployment with the go-live entry (attributes as given, none when null) on {@code data-service}. */
-    private static String manifest(String goLiveAttributes) {
-        String entry = goLiveAttributes == null ? "" : """
-                            - name: WEBANALYTICS_COVERAGE_GOLIVEDATE
-                              %s
-                """.formatted(goLiveAttributes);
-        return """
-                apiVersion: apps/v1
-                kind: Deployment
-                spec:
-                  template:
-                    spec:
-                      containers:
-                        - name: data-service
-                          env:
-                            - name: OTHER
-                              value: "x"
-                %s""".formatted(entry);
+    private static String deployment(String name, String containers) {
+        return "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: " + name + "\nspec:\n  template:\n"
+                + "    spec:\n      containers:\n" + containers;
+    }
+
+    private static String container(String name, String envEntries) {
+        return "        - name: " + name + "\n          env:\n"
+                + "            - name: OTHER\n              value: \"x\"\n" + envEntries;
+    }
+
+    private static String env(String name, String attributes) {
+        return "            - name: " + name + "\n              " + attributes + "\n";
     }
 
     /**
-     * The value of {@code WEBANALYTICS_COVERAGE_GOLIVEDATE} on the {@code data-service} container of the Deployment, or
-     * null when there is none. Fails (AssertionError) for a non-string value, {@code valueFrom}, or another
-     * {@code WEBANALYTICS_COVERAGE*} entry.
+     * The value of {@code WEBANALYTICS_COVERAGE_GOLIVEDATE} on the {@code data-service} container of the
+     * {@code data-service} Deployment, or null when there is none. Fails (AssertionError) when that Deployment lacks
+     * its {@code data-service} container, for a coverage entry on another container, a second or another
+     * {@code WEBANALYTICS_COVERAGE*} entry, {@code valueFrom}, or a non-string value. Other Deployments are ignored.
      */
     @SuppressWarnings("unchecked")
     static String goLiveEnvValue(String yaml) {
-        List<Map<String, Object>> env = new ArrayList<>();
+        List<Map<String, Object>> entries = new ArrayList<>();
         for (Object document : new Yaml(new SafeConstructor(new LoaderOptions())).loadAll(yaml)) {
-            if (!(document instanceof Map<?, ?> doc) || !"Deployment".equals(doc.get("kind"))) {
+            if (!(document instanceof Map<?, ?> doc) || !"Deployment".equals(doc.get("kind"))
+                    || !"data-service".equals(((Map<String, Object>) doc.get("metadata")).get("name"))) {
                 continue;
             }
             Map<String, Object> podSpec = (Map<String, Object>) ((Map<String, Object>) ((Map<String, Object>)
                     doc.get("spec")).get("template")).get("spec");
-            for (Map<String, Object> container : (List<Map<String, Object>>) podSpec.get("containers")) {
-                if ("data-service".equals(container.get("name")) && container.get("env") != null) {
-                    env.addAll((List<Map<String, Object>>) container.get("env"));
+            List<Map<String, Object>> containers = (List<Map<String, Object>>) podSpec.get("containers");
+            assertThat(containers).as("the data-service Deployment has a data-service container")
+                    .anyMatch(c -> "data-service".equals(c.get("name")));
+            for (Map<String, Object> container : containers) {
+                List<Map<String, Object>> env = container.get("env") == null ? List.of()
+                        : (List<Map<String, Object>>) container.get("env");
+                for (Map<String, Object> entry : env) {
+                    if (String.valueOf(entry.get("name")).startsWith("WEBANALYTICS_COVERAGE")) {
+                        assertThat(container.get("name")).as("coverage entries only on the data-service container")
+                                .isEqualTo("data-service");
+                        entries.add(entry);
+                    }
                 }
             }
         }
-        Map<String, Map<String, Object>> coverage = new HashMap<>();
-        for (Map<String, Object> entry : env) {
-            if (String.valueOf(entry.get("name")).startsWith("WEBANALYTICS_COVERAGE")) {
-                coverage.put(String.valueOf(entry.get("name")), entry);
-            }
-        }
-        if (coverage.isEmpty()) {
+        if (entries.isEmpty()) {
             return null;
         }
-        assertThat(coverage).as("only WEBANALYTICS_COVERAGE_GOLIVEDATE").containsOnlyKeys("WEBANALYTICS_COVERAGE_GOLIVEDATE");
-        Map<String, Object> entry = coverage.get("WEBANALYTICS_COVERAGE_GOLIVEDATE");
+        assertThat(entries).as("exactly one WEBANALYTICS_COVERAGE_GOLIVEDATE and no other coverage entry")
+                .singleElement().satisfies(e -> assertThat(e.get("name")).isEqualTo("WEBANALYTICS_COVERAGE_GOLIVEDATE"));
+        Map<String, Object> entry = entries.getFirst();
         assertThat(entry).as("no valueFrom").doesNotContainKey("valueFrom");
         assertThat(entry.get("value")).as("a quoted ISO date (string)").isInstanceOf(String.class);
         return (String) entry.get("value");

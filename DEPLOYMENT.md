@@ -345,7 +345,14 @@ WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_CO
 **Order:**
 1. furchert-ch#158 is merged, its image is built and rolled out (the flip).
 2. The furchert-ch post-flip checks V0–V13 pass.
-3. Merge the one-line manifest PR (`WEBANALYTICS_COVERAGE_GOLIVEDATE: "D"`) in this repo. Merging on D + 1 is still valid: the date names the day, not the merge time.
+3. Merge the manifest PR in this repo. It adds one entry to the `data-service` container's `env` list (D as a quoted ISO date, e.g. `"2026-11-20"`):
+
+   ```yaml
+               - name: WEBANALYTICS_COVERAGE_GOLIVEDATE
+                 value: "2026-11-20"
+   ```
+
+   Merging on D + 1 is still valid: the date names the day, not the merge time.
 4. Post-merge check (below), then the remaining E2E items that need it.
 5. homelab#352 (`WebAnalyticsIngestSilent`) after the checklist has passed.
 
@@ -359,14 +366,19 @@ WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_CO
 
 ```bash
 kubectl -n apps port-forward svc/data-service 8082:8082 &
-curl -s -H "Authorization: Bearer $TOKEN" localhost:8082/api/webanalytics/coverage | jq '{baselineFrom, days: (.daily | length)}'
+# --fail turns a 401/403/5xx into an error instead of an empty-looking answer; jq -e rejects any other shape.
+curl -sS --fail -H "Authorization: Bearer $TOKEN" localhost:8082/api/webanalytics/coverage \
+  | jq -e 'if has("baselineFrom") and (.daily | type == "array")
+           then {baselineFrom, days: (.daily | length), firstDay: .daily[0].day}
+           else error("not a /coverage response") end'
+curl -sS --fail -H "Authorization: Bearer $TOKEN" localhost:8082/api/webanalytics/status | jq -e '.lastCompleteDay'
 ```
 
 | When | Expected |
 |---|---|
 | Before D (a future date) | `baselineFrom: null`, `daily` empty |
 | On D, before D + 1 07:30 Zurich | `baselineFrom: "D"`, `daily` still empty: D is not final yet, and only final days are served (WA-3a rule) |
-| From D + 1 07:30 Zurich | `daily[0].day == "D"` with `consentedPageviews > 0`; `byPage` and `enquiries` from D. `/status` is unchanged |
+| Once `/status` `lastCompleteDay` ≥ D (the 07:30 Zurich run on D + 1 starts the rollup; check its success, not the clock) | `firstDay == "D"`, and `daily[0].consentedPageviews > 0`; `byPage` and `enquiries` from D. `/status` otherwise unchanged |
 
 The pre-launch Cloudflare rows (backfilled since WA-3b) stay stored and are never compared.
 
