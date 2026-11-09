@@ -155,7 +155,7 @@ sshd authentication results per node and source. Default window 24 h; ordered by
 
 Top outbound TCP destinations per workload, aggregated from the hourly `egress_flow_snapshots` rows that overlap the window. Since data-service#57 the hourly rows are kept 8 days (staging: 30) and older days come from the daily aggregate `egress_flow_daily`:
 
-- A window that starts at or after `now − 8 d` (the raw retention) reads the hourly rows only, exactly as before. The dashboard's 24 h and 7 d ranges are such windows.
+- A window that starts at or after `now − 8 d` (the raw retention; one hour of grace for windows derived from a slightly earlier clock, such as furchert-ch's `now − 30 d`) reads the hourly rows only, exactly as before. The dashboard's 24 h and 7 d ranges are such windows, and during the staging override (30 d) every allowed window.
 - An older window reads `egress_flow_daily` for every whole UTC day inside it up to the raw cut-off (`start of the current UTC day − 7 d`), and the hourly rows from the cut-off on. A partial first day, and a partial last day before the cut-off, are left out: windows older than the cut-off start at the next whole UTC day.
 - Every field keeps its meaning: `node` = the node with the most hourly rows (ties by name), `fqdn` = the newest non-null, `firstSeenInWindow` = the earliest hourly window (never more than the overlapping hour before `from`), `isNew` = any of them new.
 

@@ -121,6 +121,27 @@ class EgressTopDailyIntegrationTest extends AbstractIntegrationTest {
                 .isEqualTo(staging.topFromHourlyRows(thirtyDays, null, null, null, 50));
     }
 
+    @Test
+    void aWindowDerivedFromAnEarlierClockStillReadsTheHourlyRows() {
+        // furchert-ch computes from = its now − 30 d; data-service's clock is a little later when it reads. With the
+        // staging retention of 30 days the hourly rows of the partial first day are still there and must be counted.
+        Instant clientNow = Instant.parse("2026-10-09T15:30:00Z");
+        Instant from = clientNow.minusSeconds(30L * 24 * 3600); // 2026-09-09T15:30Z
+        row("2026-09-09T16:00:00Z", "mba1", "140.82.121.7", null, 7, true);
+        jdbc.sql("DELETE FROM netmon.egress_flow_daily").update();
+        EgressQueryRepository later = new EgressQueryRepository(jdbc,
+                Clock.fixed(clientNow.plusSeconds(2), ZoneOffset.UTC), retention(30));
+        TimeWindow window = new TimeWindow(from, clientNow);
+        List<EgressTopItem> items = later.top(window, null, null, null, 50);
+        assertThat(items).isEqualTo(later.topFromHourlyRows(window, null, null, null, 50));
+        assertThat(items).extracting(EgressTopItem::destinationIp).contains("140.82.121.7");
+        // More than the one-hour grace before now − rawDays: the union path (daily rows, whole days).
+        EgressQueryRepository muchLater = new EgressQueryRepository(jdbc,
+                Clock.fixed(clientNow.plusSeconds(2 * 3600), ZoneOffset.UTC), retention(30));
+        assertThat(muchLater.top(window, null, null, null, 50)).extracting(EgressTopItem::destinationIp)
+                .doesNotContain("140.82.121.7");
+    }
+
     private void row(String windowStart, String node, String ip, String fqdn, long bytes, boolean isNew) {
         jdbc.sql("""
                         INSERT INTO netmon.egress_flow_snapshots (window_start, window_end, node, container_id, namespace, pod,

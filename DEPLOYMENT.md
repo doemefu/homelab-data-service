@@ -339,7 +339,7 @@ data-service#57 (owner decision 2026-11-09): the hourly `netmon.egress_flow_snap
 - The docs/060 spec PR is merged.
 - Merging is the rollout (Flux image automation). Do not merge, roll out or delete the pod within 30 min of 00:00 UTC (day boundary of the daily rows).
 
-**Stage 1 (this PR):** it ships `NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS: "30"` in `k8s/deployment.yaml`. Nothing is deleted, `/egress/top` reads the hourly rows only (every allowed window starts after `now − 30 d`), and the daily table fills.
+**Stage 1 (this PR):** it ships `NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS: "30"` in `k8s/deployment.yaml`. Nothing is deleted, `/egress/top` reads the hourly rows only (every allowed window starts after `now − 30 d`, with one hour of grace for a request whose window was computed a moment earlier), and the daily table fills.
 1. After the first `egress` run (:07): the log has `[egress] daily repair recomputed=… failed=0`. The first run fills ≈ 30 days, one statement per day, and may take a few minutes.
 2. `select count(*), min(day), max(day) from netmon.egress_flow_daily;` → about 700–800 rows per day, back to the oldest hourly day.
 3. Parity, read-only, for a few days. Every row must show `equal = t` and the second query `differing = 0`. Replace `30` with the current raw retention.

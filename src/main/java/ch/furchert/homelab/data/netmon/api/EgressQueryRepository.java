@@ -20,7 +20,8 @@ import java.util.List;
  * {@code (namespace, workload, container, destination_host, destination_port)} — {@code destination_host} is the IP,
  * or the name of a name-grouped destination — and ordered by total bytes.
  *
- * <p>data-service#57: a window starting at or after {@code now − rawDays} reads the hourly rows only (all retained).
+ * <p>data-service#57: a window starting at or after {@code now − rawDays} (with a grace of one hour for windows derived
+ * from a slightly earlier clock) reads the hourly rows only.
  * An older window reads {@code egress_flow_daily} for every whole UTC day {@code d} with {@code d >= from} and
  * {@code d + 1 <= min(to, rawCutoff)}, and the hourly rows overlapping {@code [max(from, rawCutoff), to)}, where
  * {@code rawCutoff = start of today (UTC) − (rawDays − 1) d}; a partial first or last day before the cut-off is left
@@ -29,6 +30,13 @@ import java.util.List;
  */
 @Repository
 public class EgressQueryRepository {
+
+    /**
+     * A window derived from an earlier "now" (furchert-ch computes {@code from = its now − 30 d}; the request reaches
+     * data-service a moment later) still counts as inside the raw retention if it starts at most this long before
+     * {@code now − rawDays}.
+     */
+    static final Duration RAW_GRACE = Duration.ofHours(1);
 
     private final JdbcClient jdbc;
     private final Clock clock;
@@ -47,7 +55,7 @@ public class EgressQueryRepository {
      */
     public List<EgressTopItem> top(TimeWindow window, String scope, String namespace, String workload, int limit) {
         Instant now = clock.instant();
-        if (!window.from().isBefore(now.minus(Duration.ofDays(rawDays)))) {
+        if (!window.from().isBefore(now.minus(Duration.ofDays(rawDays)).minus(RAW_GRACE))) {
             return topFromHourlyRows(window, scope, namespace, workload, limit);
         }
         Instant rawCutoff = startOfUtcDay(now).minus(Duration.ofDays(rawDays - 1L));
