@@ -139,7 +139,12 @@ class WebAnalyticsEraseIntegrationTest extends AbstractIntegrationTest {
                     .andExpect(jsonPath("$.instance").value(TEMPLATE))
                     .andExpect(content().string(not(containsString(visitor.toString()))));
 
-            // Released while the erasure waits: the erasure completes after the in-flight batch.
+            // An in-flight batch inserts a row of the visitor (it validated before the tombstone existed) and commits
+            // while the erasure waits at the barrier: the erasure runs after that commit, so the row is gone too.
+            s.execute("INSERT INTO webanalytics.events (event_id, event_type, occurred_at, received_at, visitor_id, "
+                    + "pageview_id, seq, path, locale, landing, device_class, browser_family, os_family, source) "
+                    + "VALUES (gen_random_uuid(), 'pageview', now(), now(), '" + visitor + "', gen_random_uuid(), 0, "
+                    + "'/', 'de', false, 'desktop', 'firefox', 'macos', 'furchert-ch')");
             CompletableFuture<Void> release = CompletableFuture.runAsync(() -> {
                 try {
                     TimeUnit.MILLISECONDS.sleep(300);
@@ -152,6 +157,31 @@ class WebAnalyticsEraseIntegrationTest extends AbstractIntegrationTest {
             release.get(5, TimeUnit.SECONDS);
         }
         assertThat(rows(visitor)).isZero();
+    }
+
+    @Test
+    void parallelErasuresOnlyMeetAtTheBarrier() throws Exception {
+        List<UUID> visitors = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        for (UUID v : visitors) {
+            raw.pageview(v, Instant.now().minusSeconds(60), "/");
+        }
+        long started = System.nanoTime();
+        List<CompletableFuture<Integer>> calls = visitors.stream()
+                .map(v -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return erase(v.toString()).andReturn().getResponse().getStatus();
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                }))
+                .toList();
+        for (CompletableFuture<Integer> call : calls) {
+            assertThat(call.get(10, TimeUnit.SECONDS)).isEqualTo(204);
+        }
+        assertThat(java.time.Duration.ofNanos(System.nanoTime() - started)).isLessThan(java.time.Duration.ofSeconds(3));
+        for (UUID v : visitors) {
+            assertThat(rows(v)).isZero();
+        }
     }
 
     @Test

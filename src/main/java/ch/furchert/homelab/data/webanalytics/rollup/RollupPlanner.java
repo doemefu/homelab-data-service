@@ -1,5 +1,7 @@
 package ch.furchert.homelab.data.webanalytics.rollup;
 
+import ch.furchert.homelab.data.config.WebAnalyticsProperties;
+
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collection;
@@ -38,7 +40,7 @@ public final class RollupPlanner {
 
     /** With the shipped raw retention of 396 days. */
     public RollupPlanner(ZurichDays days) {
-        this(days, ch.furchert.homelab.data.config.WebAnalyticsProperties.Retention.DEFAULT_EVENTS_DAYS);
+        this(days, WebAnalyticsProperties.Retention.DEFAULT_EVENTS_DAYS);
     }
 
     /** @param retentionDays the configured {@code webanalytics.retention.events-days} (freeze guard (b)) */

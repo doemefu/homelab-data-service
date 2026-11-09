@@ -16,7 +16,8 @@ import java.util.UUID;
  * id; (2) a barrier transaction takes the exclusive side of the ingest lock (lock_timeout 1 s) and commits at once,
  * which waits for batches already in flight (they hold the shared side) but never holds the lock across the deletes,
  * so parallel erasures only meet at the barrier; (3) batched deletes ({@value #BATCH_SIZE} rows per statement and
- * transaction, 2 s statement timeout) until none are left or the per-request bound of 2.5 s has elapsed. Progress is
+ * transaction) until none are left. The per-request bound of 2.5 s is checked before every batch, and each batch's
+ * statement timeout is the remaining time (at most 2 s, at least 100 ms). Progress is
  * committed per batch; an incomplete erasure (bound elapsed, barrier lock timeout, statement timeout) throws
  * {@link VisitorEraseIncompleteException} and the client's retry finishes it. Logs the row count only, never the id.
  */
@@ -25,6 +26,8 @@ public class VisitorEraseService {
 
     static final int BATCH_SIZE = 5_000;
     static final Duration BOUND = Duration.ofMillis(2_500);
+    static final long MAX_STATEMENT_TIMEOUT_MS = 2_000;
+    static final long MIN_STATEMENT_TIMEOUT_MS = 100;
     private static final Logger log = LoggerFactory.getLogger(VisitorEraseService.class);
 
     private final WebAnalyticsRepository repository;
@@ -44,7 +47,16 @@ public class VisitorEraseService {
     public long erase(UUID visitorId) {
         long started = System.nanoTime();
         tombstones.add(visitorId);
-        caps.forgetVisitor(visitorId);
+        try {
+            return eraseRows(visitorId, started);
+        } finally {
+            // After the barrier and the deletes: a batch that committed while the barrier waited may have charged the
+            // visitor's per-visitor count; the key goes so the next sight re-seeds it from the (now empty) table.
+            caps.forgetVisitor(visitorId);
+        }
+    }
+
+    private long eraseRows(UUID visitorId, long started) {
         try {
             transactions.executeWithoutResult(status -> repository.eraseBarrier());
         } catch (DataAccessException e) {
@@ -56,9 +68,18 @@ public class VisitorEraseService {
         }
         long total = 0;
         while (true) {
+            // The bound is checked before every batch, and a batch may only use the remaining time (floor 100 ms),
+            // so a response stays within about 2.5 s (furchert-ch's attempt timeout is 3 s).
+            long remainingMs = BOUND.minus(Duration.ofNanos(System.nanoTime() - started)).toMillis();
+            if (remainingMs <= 0) {
+                log.warn("[webanalytics] visitor erase incomplete rows={}", total);
+                throw new VisitorEraseIncompleteException();
+            }
+            long timeoutMs = Math.max(MIN_STATEMENT_TIMEOUT_MS, Math.min(MAX_STATEMENT_TIMEOUT_MS, remainingMs));
             Integer deleted;
             try {
-                deleted = transactions.execute(status -> repository.deleteVisitorBatch(visitorId, BATCH_SIZE));
+                deleted = transactions.execute(status ->
+                        repository.deleteVisitorBatch(visitorId, BATCH_SIZE, timeoutMs));
             } catch (DataAccessException e) {
                 if (!isTimeout(e)) {
                     throw e;
@@ -69,10 +90,6 @@ public class VisitorEraseService {
             total += deleted == null ? 0 : deleted;
             if (deleted == null || deleted < BATCH_SIZE) {
                 break;
-            }
-            if (Duration.ofNanos(System.nanoTime() - started).compareTo(BOUND) >= 0) {
-                log.warn("[webanalytics] visitor erase incomplete rows={}", total);
-                throw new VisitorEraseIncompleteException();
             }
         }
         log.info("[webanalytics] visitor erased rows={}", total);

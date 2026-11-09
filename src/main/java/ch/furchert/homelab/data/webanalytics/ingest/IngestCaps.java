@@ -242,6 +242,12 @@ public class IngestCaps {
     }
 
     /**
+     * Replaces the committed counts with the database counts plus the batches committed since {@link #seedStarted}.
+     * At startup nothing is committed before the query, so this is exact. During a live re-seed (5 minutes after a
+     * failed seed, with traffic) a batch that commits after {@code seedStarted} but before the query's snapshot is
+     * counted twice (in the query result and in the delta): the error only ever overcounts, i.e. errs toward capping
+     * early, and disappears at the next window or restart.
+     *
      * @param hourCounts stored analytics events per UTC hour start of {@code received_at}, from the start of the UTC
      *                   day of {@code now − 2 h}
      */

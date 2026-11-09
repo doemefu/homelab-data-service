@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 public final class ProblemInstance {
 
     public static final String VISITORS_TEMPLATE = "/api/webanalytics/visitors/%7BvisitorId%7D";
-    private static final Pattern VISITORS = Pattern.compile("^/api/webanalytics/visitors/[^/]*$");
+    private static final Pattern VISITORS = Pattern.compile("^/api/webanalytics/visitors(/.*)?$");
 
     private ProblemInstance() {
     }

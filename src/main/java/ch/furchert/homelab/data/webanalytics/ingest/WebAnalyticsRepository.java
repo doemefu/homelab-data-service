@@ -145,9 +145,10 @@ public class WebAnalyticsRepository {
                 "SELECT pg_advisory_xact_lock(hashtext('webanalytics-ingest'))::text", String.class);
     }
 
-    /** Deletes up to {@code limit} rows of the visitor (one erasure batch, 2 s statement timeout); returns the count. */
-    public int deleteVisitorBatch(UUID visitorId, int limit) {
-        named.getJdbcTemplate().execute("SET LOCAL statement_timeout = '2s'");
+    /** Deletes up to {@code limit} rows of the visitor (one erasure batch) within {@code timeoutMs}; returns the count. */
+    public int deleteVisitorBatch(UUID visitorId, int limit, long timeoutMs) {
+        named.queryForObject("SELECT set_config('statement_timeout', :timeout, true)",
+                new MapSqlParameterSource("timeout", timeoutMs + "ms"), String.class);
         return named.update("""
                         DELETE FROM webanalytics.events WHERE ctid IN (
                             SELECT ctid FROM webanalytics.events WHERE visitor_id = :id LIMIT :limit)
