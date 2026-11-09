@@ -342,7 +342,7 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
 
         assertThatThrownBy(() -> collector(clockAt(zurich("2026-11-09T07:30:00"))).collect())
                 .isInstanceOf(CollectorWarning.class)
-                .hasMessageContaining("CF baseline refresh: 3 day(s) failed (QueryTimeoutException), remaining days deferred");
+                .hasMessageContaining("CF baseline refresh: 3 day(s) failed (QueryTimeoutException), remaining days skipped");
         verify(rollupRepository, times(3)).replaceCfBaseline(any(), any(), any(), any(), any());
         assertThat(sum("SELECT count(*) FROM webanalytics.rollup_day WHERE day BETWEEN '2026-11-03' AND '2026-11-07'"))
                 .isEqualTo(5);

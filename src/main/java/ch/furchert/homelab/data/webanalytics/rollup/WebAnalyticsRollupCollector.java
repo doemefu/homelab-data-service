@@ -229,12 +229,13 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
     /**
      * Replaces the baseline of every rolled day ({@link #replaceCfBaselineDay}), except the days whose backfill just
      * failed in this run (they are still missing, so the next run's backfill retries them). Stops at a held lock and
-     * after {@link #MAX_CONSECUTIVE_CF_BASELINE_FAILURES} failed days in a row.
+     * after {@link #MAX_CONSECUTIVE_CF_BASELINE_FAILURES} failed days in a row; the remaining days are skipped, not
+     * retried (a final day keeps its earlier rows).
      */
     void refreshCfBaseline(List<LocalDate> rolled, Set<LocalDate> skip, List<String> problems) {
         int failed = 0;
         int consecutive = 0;
-        boolean deferred = false;
+        boolean skipped = false;
         String failure = null;
         for (LocalDate day : rolled) {
             if (skip.contains(day)) {
@@ -253,14 +254,14 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
                     failure = e.getClass().getSimpleName();
                 }
                 if (++consecutive >= MAX_CONSECUTIVE_CF_BASELINE_FAILURES) {
-                    deferred = true;
+                    skipped = true;
                     break;
                 }
             }
         }
         if (failed > 0) {
             problems.add("CF baseline refresh: " + failed + " day(s) failed (" + failure + ")"
-                    + (deferred ? ", remaining days deferred" : ""));
+                    + (skipped ? ", remaining days skipped" : ""));
         }
     }
 
