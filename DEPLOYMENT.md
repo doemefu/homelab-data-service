@@ -230,7 +230,7 @@ WA-3a adds the migration `V7__webanalytics_core_aggregates` (nine tables, additi
 WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, additive), raises the rollup definition to 2, and adds `GET /api/webanalytics/funnels`, `/paths`, `/audience`, `/coverage` plus the `/pages/detail` drilldown (contract `docs/100-web-analytics.md` rev 3.5). No new env var, Secret key, NetworkPolicy, outbound destination or dependency. The rollup gate N1 is unchanged.
 
 1. **Merge this PR.** Flux rolls out the image; Flyway applies V8. `/api/webanalytics/status` then shows `definitionVersion: 2`; the four new endpoints answer with the empty state.
-2. **Rollup still disabled:** nothing else happens. On the first enabled run (after gate N1) the collector backfills `daily_cf_baseline` from every day netmon holds (about 90 days, one statement) and recomputes the last 30 days with definition 2 (at most 31 days per run).
+2. **Rollup still disabled:** nothing else happens. On the first enabled run (after gate N1) the collector backfills `daily_cf_baseline` from every day netmon holds (about 90 days, one statement and transaction per day) and recomputes the last 30 days with definition 2 (at most 31 days per run).
 3. **Rollup already enabled when WA-3b ships:** the same happens on the next trigger (01:12 or 07:30). Check afterwards: `select count(*), min(day), max(day) from webanalytics.daily_cf_baseline;` and `select definition_version, count(*) from webanalytics.rollup_day group by 1;`.
 4. `/coverage` compares nothing until WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` (homelab-data-service#61); a future date also compares nothing until that day.
 
@@ -238,9 +238,10 @@ WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, addit
 
 | Symptom | Likely cause |
 |---|---|
-| `/status`: `webanalytics-rollup` `lastErrorCode=partial`, message names the CF baseline | The Cloudflare-baseline step failed or its lock was held; the analytics days were written; the next run retries (the backfill only while the table is still empty) |
+| `/status`: `webanalytics-rollup` `lastErrorCode=partial`, message names the CF baseline | The Cloudflare-baseline step failed or its lock was held; the analytics days were written; the next run retries. The backfill message counts the failed days (`CF baseline backfill: n day(s) failed (…)`, with `remaining days deferred` after three failures in a row); the days already written stay, and the next run fills only the days still missing |
 | `daily_cf_baseline` stays empty after enabling | netmon holds no request groups yet (Cloudflare collectors without credentials); the backfill retries on every run until netmon has data |
-| `/funnels`, `/paths` or `/audience` return an empty range | No final day with definition 2 yet, or none after the newest final definition-1 day (for example after a rollback longer than 30 days; `definitionFrom` null) |
+| The same day fails on every run with `QueryTimeoutException` | One Zurich day of netmon request groups exceeds the 120 s statement timeout; the other days are written. Time the day's `SELECT` with `EXPLAIN ANALYZE` in the PostgreSQL pod (index on `netmon.inbound_request_groups.window_start`) |
+| `/funnels`, `/paths` or `/audience` return an empty range, or `/coverage` an empty `daily` although the go-live date has passed | No final day with definition 2 yet, or none after the newest final definition-1 day (for example after a rollback longer than 30 days; `definitionFrom` null) |
 
 ## Verification (§11 NM-0)
 

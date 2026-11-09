@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -23,7 +24,11 @@ import java.util.UUID;
 import static ch.furchert.homelab.data.support.RollupEvents.zurich;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /** WA-3b rollup against PostgreSQL (docs/100 §7.5, §7.8, §8.5, rev 3.5): journeys, submits, definition bump, CF baseline. */
 class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTest {
@@ -226,7 +231,8 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
             s.execute("SELECT pg_advisory_lock(hashtext('webanalytics-rollup'))");
             try {
                 assertThatThrownBy(() -> collector(clockAt(zurich("2026-11-09T07:30:00"))).collect())
-                        .isInstanceOf(CollectorWarning.class).hasMessageContaining("CF baseline backfill skipped");
+                        .isInstanceOf(CollectorWarning.class)
+                        .hasMessageContaining("CF baseline backfill stopped after 0 day(s)");
             } finally {
                 s.execute("SELECT pg_advisory_unlock(hashtext('webanalytics-rollup'))");
             }
@@ -235,7 +241,53 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
     }
 
     @Test
-    void aFailedBackfillSkipsTheDayReplacesSoTheNextRunRetriesIt() {
+    void aFailedBackfillDayDoesNotBlockTheOtherDaysAndIsResumedOnTheNextRun() {
+        rows.landing(UUID.randomUUID(), zurich("2026-11-08T10:00:00"), "/", null, null); // a day is rolled
+        inbound.page(zurich("2026-11-05T10:00:00"), "/de", 1); // oldest, partial
+        inbound.page(zurich("2026-11-06T10:00:00"), "/de", 2);
+        inbound.page(zurich("2026-11-07T10:00:00"), "/de", 3);
+        inbound.page(zurich("2026-11-08T10:00:00"), "/de", 4);
+        LocalDate slow = LocalDate.parse("2026-11-06");
+        doThrow(new QueryTimeoutException("simulated")).doCallRealMethod()
+                .when(rollupRepository).replaceCfBaseline(eq(slow), eq(slow), any(), any(), any());
+        MutableClock clock = clockAt(zurich("2026-11-09T07:30:00"));
+
+        // Each day is its own statement and transaction: one timed-out day leaves the others filled.
+        assertThatThrownBy(() -> collector(clock).collect())
+                .isInstanceOf(CollectorWarning.class)
+                .hasMessageContaining("CF baseline backfill: 1 day(s) failed (QueryTimeoutException)");
+        assertThat(sum("SELECT count(*) FROM webanalytics.rollup_day WHERE day = '2026-11-08'")).isEqualTo(1);
+        assertThat(baseline()).containsExactly("2026-11-07 / de 3 false", "2026-11-08 / de 4 false");
+
+        // The retry fills only the missing day; already filled days are skipped (a late row does not change them).
+        inbound.page(zurich("2026-11-07T11:00:00"), "/de", 100);
+        clock.advance(Duration.ofMinutes(5));
+        collector(clock).collect();
+        assertThat(baseline()).containsExactly("2026-11-06 / de 2 false", "2026-11-07 / de 3 false",
+                "2026-11-08 / de 4 false");
+    }
+
+    @Test
+    void aSystemicBackfillFailureStopsAfterThreeConsecutiveDays() {
+        new AggregateRows(jdbc).rollupDay(LocalDate.parse("2026-11-08"), true); // nothing left to roll
+        inbound.page(zurich("2026-11-01T10:00:00"), "/de", 1); // oldest, partial
+        for (int d = 2; d <= 8; d++) {
+            inbound.page(zurich("2026-11-0" + d + "T10:00:00"), "/de", d);
+        }
+        doThrow(new QueryTimeoutException("simulated"))
+                .when(rollupRepository).replaceCfBaseline(any(), any(), any(), any(), any());
+
+        // Seven missing days, but a fault that hits every day costs three statement timeouts, not seven.
+        assertThatThrownBy(() -> collector(clockAt(zurich("2026-11-09T07:30:00"))).collect())
+                .isInstanceOf(CollectorWarning.class)
+                .hasMessageContaining("CF baseline backfill: 3 day(s) failed (QueryTimeoutException)")
+                .hasMessageContaining("remaining days deferred");
+        verify(rollupRepository, times(3)).replaceCfBaseline(any(), any(), any(), any(), any());
+        assertThat(baseline()).isEmpty();
+    }
+
+    @Test
+    void aFailedBackfillScanStillRefreshesTheRolledDaysAndTheNextRunFillsTheRest() {
         rows.landing(UUID.randomUUID(), zurich("2026-11-08T10:00:00"), "/", null, null); // a day is rolled
         inbound.page(zurich("2026-11-06T10:00:00"), "/de", 1); // oldest, partial
         inbound.page(zurich("2026-11-07T10:00:00"), "/de", 2);
@@ -246,8 +298,7 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
 
         assertThatThrownBy(() -> collector(clock).collect())
                 .isInstanceOf(CollectorWarning.class).hasMessageContaining("CF baseline backfill failed");
-        assertThat(sum("SELECT count(*) FROM webanalytics.rollup_day WHERE day = '2026-11-08'")).isEqualTo(1);
-        assertThat(baseline()).isEmpty();
+        assertThat(baseline()).containsExactly("2026-11-08 / de 3 false");
 
         clock.advance(Duration.ofMinutes(5));
         collector(clock).collect();
