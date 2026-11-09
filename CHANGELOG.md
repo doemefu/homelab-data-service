@@ -59,6 +59,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - `k8s/deployment.yaml`: `CLOUDFLARE_GRAPHQL_URL`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `ABUSEIPDB_API_KEY` (Secret keys `optional: true`).
 
 ### Changed
+- WA-6 (#61): `k8s/deployment.yaml` sets `WEBANALYTICS_COVERAGE_GOLIVEDATE: "2026-11-10"`, so `/coverage` compares from the first full day after the evening go-live flip of 2026-11-09 (deviation from "the go-live day", spec follow-up).
 - `/egress/top` (#57 follow-up): the hourly query bounds `window_start` from below (equal to `window_end > from` by the V4 CHECK), so it no longer reads the whole table on every call, and `scope=external` is a literal predicate served by the new partial index `V10__netmon_egress_external_idx`.
 - Egress (#57): hourly `egress_flow_snapshots` rows are kept 8 days instead of 30 (only days that have daily rows are deleted; staged with `NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS=30` in `k8s/deployment.yaml` until parity is checked); `/egress/top` reads windows older than `now − 8 d` from daily rows for whole UTC days before the cut-off; `is_new` looks at the same UTC day's hourly rows and 30 daily days.
 - `k8s/deployment.yaml`: the `webanalytics-rollup` collector is enabled (#54) with `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED: "true"`, after gate N1 (doemefu/homelab#350); rollback = remove the entry or set it to `"false"`.
