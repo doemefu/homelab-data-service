@@ -108,6 +108,13 @@ spec:
             # (or set "false").
             - name: NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED
               value: "true"
+            # Web analytics coverage go-live (docs/100 §8.2, §17 WA-6; homelab-data-service#61): /coverage compares
+            # consented tracking with the Cloudflare baseline from this Europe/Zurich day on. The flip (furchert-ch#158)
+            # happens on the evening of 2026-11-09, so the go-live date is the first full day 2026-11-10 (documented
+            # deviation from "D = flip day", DEPLOYMENT "WA-6 rollout"). Binds only because application.yaml keeps the
+            # explicit empty `webanalytics.coverage.go-live-date:`; rollback = remove this entry (coverage empty again).
+            - name: WEBANALYTICS_COVERAGE_GOLIVEDATE
+              value: "2026-11-10"
             # Egress staging (data-service#57, DEPLOYMENT "#57 rollout"): keep 30 days of hourly egress rows while
             # egress_flow_daily fills and its parity is checked; a follow-up PR removes this entry (default 8 days).
             - name: NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS

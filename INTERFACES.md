@@ -458,7 +458,7 @@ No other service reads or writes this database.
 | `netmon.egress.pod-cidr` / `service-cidr` / `lan-cidr` | `10.42.0.0/16` / `10.43.0.0/16` / `192.168.1.0/24` | Destination scope `pod` / `service` / `lan`; loopback is `loopback`, everything else `external` |
 | `netmon.scheduling.enabled` | `true` | Turns every `@Scheduled` trigger off (the test suite sets `false`) |
 | `webanalytics.api.write-clients` | `[furchert-ch]` | Token `sub` values allowed on `POST /api/webanalytics/events`; empty admits nobody |
-| `webanalytics.coverage.go-live-date` | unset (empty entry in `application.yaml`) | First day of tracked traffic (`/coverage.baselineFrom`); set in WA-6 with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` (`GoLiveDateBindingTest`) |
+| `webanalytics.coverage.go-live-date` | unset (empty entry in `application.yaml`); `2026-11-10` in `k8s/deployment.yaml` since WA-6 (#61) | First day of tracked traffic (`/coverage.baselineFrom`), set with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` (`GoLiveDateBindingTest` checks the manifest value). The flip was on the evening of 2026-11-09, so the first full day is used (deviation from "the go-live day", spec follow-up) |
 | `webanalytics.api.read-clients` | `[furchert-ch]` | Token `sub` values allowed on `GET /api/webanalytics/*`; empty admits nobody |
 | `netmon.collectors.webanalytics-rollup.enabled` | `false` (set explicitly in `application.yaml`) | Rollup kill switch; enabled only after gate N1 with the env var `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED=true`, which binds only because the YAML entry exists (DEPLOYMENT.md "WA-3a rollout") |
 | `webanalytics.timezone` | `Europe/Zurich` | Day boundary of `daily_ingest_stats` and `daily_enquiries` |

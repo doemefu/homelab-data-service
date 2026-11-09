@@ -420,6 +420,7 @@ WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_CO
 - If that disagrees with the first `[analytics] forward summary` line with accepted > 0 in the furchert-ch log, the summary line wins.
 - It is not the merge day of #158 if the build runs past midnight.
 - D is partial by design: tracking starts at the flip, while Cloudflare counts the whole day, so D's coverage reads low. Flip in the morning so D has most of a day of tracking.
+- **As set (2026-11-09, main-session ruling):** the flip happened on the evening of 2026-11-09, which would have left an almost empty partial first day. The go-live date is therefore **2026-11-10**, the first full day: a documented deviation from "D = flip day" and a spec follow-up for the next docs/100 PR. `/coverage` shows `baselineFrom: null` until 2026-11-10, then `"2026-11-10"`; `daily` starts once `/status` `lastCompleteDay` ≥ 2026-11-10, i.e. after the 07:30 Zurich run on 2026-11-11.
 
 **Order:**
 1. furchert-ch#158 is merged, its image is built and rolled out (the flip).
