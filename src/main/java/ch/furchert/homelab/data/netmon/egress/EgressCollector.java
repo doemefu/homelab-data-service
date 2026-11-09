@@ -1,6 +1,7 @@
 package ch.furchert.homelab.data.netmon.egress;
 
 import ch.furchert.homelab.data.config.EgressProperties;
+import ch.furchert.homelab.data.netmon.collector.CollectorException;
 import ch.furchert.homelab.data.netmon.collector.CollectorRunner;
 import ch.furchert.homelab.data.netmon.collector.CollectorState;
 import ch.furchert.homelab.data.netmon.collector.CollectorStateRepository;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -48,6 +50,10 @@ import java.util.regex.Pattern;
  * Rows beyond {@code netmon.egress.max-rows-per-window} are dropped by bytes sent, then connects, and the run
  * reports {@code truncated}; so does a window whose bytes-sent query returns its full {@code topk} of 500 series. Each window is replaced as a whole.
  *
+ * <p>Each window replace also recomputes the window's UTC day in {@code egress_flow_daily}; at the start of every run
+ * {@link EgressDailyRepair} fills or repairs daily rows, and no window is collected while a day of the {@code is_new}
+ * look-back still lacks them (a failed run with code {@code partial}; data-service#57).
+ *
  * <p>No agent publishing at the latest evaluation point (the DaemonSet is gated off or not scraped) is a successful
  * run with an {@code upstream} warning, like {@code lan}; the mark advances over the empty windows. Logs carry
  * counts only, never label values.
@@ -62,6 +68,8 @@ public class EgressCollector implements NetmonCollector {
     static final Duration CATCH_UP = Duration.ofHours(48);
     static final String NO_AGENTS = "no node exposes the coroot egress metrics";
     static final String TRUNCATED = " window(s) exceeded netmon.egress.max-rows-per-window or the bytes-sent topk bound";
+    static final String DAILY_MISSING = "daily rows missing in the is_new look-back; windows not collected this run";
+    static final String DAILY_FAILED = " day(s) of egress_flow_daily could not be recomputed";
 
     private static final Pattern NODE = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,62}");
     private static final Logger log = LoggerFactory.getLogger(EgressCollector.class);
@@ -76,10 +84,11 @@ public class EgressCollector implements NetmonCollector {
     private final Cidr podCidr;
     private final Cidr serviceCidr;
     private final Cidr lanCidr;
+    private final EgressDailyRepair dailyRepair;
 
     public EgressCollector(PrometheusClient prometheus, EgressSnapshotRepository repository,
                            IpEnrichmentService enrichment, CollectorStateRepository state, EgressProperties properties,
-                           CollectorRunner runner, Clock clock) {
+                           CollectorRunner runner, Clock clock, EgressDailyRepair dailyRepair) {
         this.prometheus = prometheus;
         this.repository = repository;
         this.enrichment = enrichment;
@@ -90,6 +99,7 @@ public class EgressCollector implements NetmonCollector {
         this.podCidr = properties.pod();
         this.serviceCidr = properties.service();
         this.lanCidr = properties.lan();
+        this.dailyRepair = dailyRepair;
     }
 
     /** Hourly at :07 UTC. */
@@ -125,6 +135,17 @@ public class EgressCollector implements NetmonCollector {
             }
         }
 
+        // data-service#57: fill/repair the daily rows first. is_new of a new window reads the daily rows of the 30 UTC
+        // days before it, so while one of them is still missing no window is collected (the 48 h catch-up replays).
+        EgressDailyRepair.Result repair = dailyRepair.repair();
+        LocalDate nextDay = EgressSnapshotRepository.utcDay(mark);
+        if (dailyRepair.anyDayMissing(nextDay.minusDays(EgressSnapshotRepository.LOOKBACK_DAYS),
+                EgressSnapshotRepository.utcDay(now))) {
+            // A failed run (not a warning), so the freshness gauge stops and NetmonCollectorStale can fire if this
+            // persists; PARTIAL is not a backoff code, so the next hourly run tries again.
+            throw new CollectorException(ErrorCode.PARTIAL, DAILY_MISSING);
+        }
+
         int processed = 0;
         int truncated = 0;
         for (Instant end = mark.plus(WINDOW); !end.isAfter(latestEnd); end = end.plus(WINDOW)) {
@@ -139,6 +160,9 @@ public class EgressCollector implements NetmonCollector {
             state.updateWindowEnd(NAME, end);
         }
         if (processed == 0) {
+            if (repair.failed() > 0) {
+                throw new CollectorWarning(ErrorCode.PARTIAL, repair.failed() + DAILY_FAILED);
+            }
             return;
         }
         // Judged at the latest evaluation point, so catch-up windows from before the rollout cannot warn.
@@ -148,6 +172,9 @@ public class EgressCollector implements NetmonCollector {
         }
         if (truncated > 0) {
             throw new CollectorWarning(ErrorCode.TRUNCATED, truncated + TRUNCATED);
+        }
+        if (repair.failed() > 0) {
+            throw new CollectorWarning(ErrorCode.PARTIAL, repair.failed() + DAILY_FAILED);
         }
     }
 

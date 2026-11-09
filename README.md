@@ -24,6 +24,7 @@ Neither ADR is in a git repository yet. Both live in the homelab parent workspac
 | WA-3a (#54) | Flyway `V7__webanalytics_core_aggregates`; `webanalytics-rollup` collector (01:12/07:30 Europe/Zurich, shipped disabled, gate N1); read API `/api/webanalytics/status`, `/overview`, `/pages`, `/pages/detail`, `/clicks`, `/sources` | merged 2026-11-08 (PR #59) |
 | WA-3b (#55) | Flyway `V8__webanalytics_path_aggregates`; funnels, paths, audience, Cloudflare baseline, submits; read API `/funnels`, `/paths`, `/audience`, `/coverage` | in review |
 | WA-5 (#56) | Ingest caps (429 `capScope`/`retryAt`, per-visitor cap), `DELETE /api/webanalytics/visitors/{id}` with tombstones, 396-day raw retention, rollup freeze guard, gauges `webanalytics_ingest_capped`/`_events_today`/`_raw_table_bytes`, `/status` `dailyCap`/`capped`/`rawRetentionStart` | in review |
+| #57 | Egress volume: `V9__netmon_egress_daily` (daily aggregate, 32 d), hourly egress rows 8 d (staged at 30 d), `/egress/top` union read | in review |
 
 ## Quick reference
 
