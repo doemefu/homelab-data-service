@@ -201,9 +201,9 @@ Form-login outcomes from auth-service (`login_events`, `occurred_at` in `[from, 
 - `clientIp` is `null` when auth-service saw no valid IP. `ipSource` is `cf-connecting-ip` or `remote-addr`; both are header-derived and spoofable in-cluster (docs/060 §10). `subject` is set only for `success`.
 - Only the first 8 hex characters of the username HMAC are served; the full HMAC never leaves the database.
 
-## 1b. Exposed: web analytics write API (WA-1)
+## 1b. Exposed: web analytics write API (WA-1, WA-5)
 
-Contract: `docs/100-web-analytics.md` §6.1 to §6.3, §7.2, §7.9 (Epic doemefu/homelab#348, issue #53). Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:8082/api/webanalytics`. The only caller is furchert-ch's server-side forward queue. Deferred to WA-5 (#56): caps and 429, `DELETE /visitors/{id}` with tombstones, retention of `events`, the capped/today/table-bytes gauges. The read API is section 1c.
+Contract: `docs/100-web-analytics.md` §6.1 to §6.3, §7.2, §7.9 (Epic doemefu/homelab#348, issue #53). Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:8082/api/webanalytics`. The only caller is furchert-ch's server-side forward queue. WA-5 (#56) adds caps and 429, `DELETE /visitors/{id}` with tombstones, retention of `events` and the capped/today/table-bytes gauges (below and section 2). The read API is section 1c.
 
 ### Authentication and authorization (§6.1)
 
