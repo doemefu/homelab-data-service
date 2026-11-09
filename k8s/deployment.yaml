@@ -108,6 +108,10 @@ spec:
             # (or set "false").
             - name: NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED
               value: "true"
+            # Egress staging (data-service#57, DEPLOYMENT "#57 rollout"): keep 30 days of hourly egress rows while
+            # egress_flow_daily fills and its parity is checked; a follow-up PR removes this entry (default 8 days).
+            - name: NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS
+              value: "30"
             # docs/060 §9 baseline, except MaxMetaspaceSize: NM-0 alone measured ~56 MB of metaspace
             # after startup and first requests (87% of the 64m baseline), so the cap is 96m.
             - name: JAVA_TOOL_OPTIONS

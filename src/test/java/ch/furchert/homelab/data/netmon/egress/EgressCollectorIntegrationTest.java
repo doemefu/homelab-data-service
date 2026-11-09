@@ -3,6 +3,7 @@ package ch.furchert.homelab.data.netmon.egress;
 import ch.furchert.homelab.data.AbstractIntegrationTest;
 import ch.furchert.homelab.data.config.EgressProperties;
 import ch.furchert.homelab.data.config.PrometheusProperties;
+import ch.furchert.homelab.data.config.RetentionProperties;
 import ch.furchert.homelab.data.netmon.collector.CollectorException;
 import ch.furchert.homelab.data.netmon.collector.CollectorRunner;
 import ch.furchert.homelab.data.netmon.collector.CollectorState;
@@ -57,6 +58,8 @@ class EgressCollectorIntegrationTest extends AbstractIntegrationTest {
     CollectorStateRepository state;
     @Autowired
     CollectorRunner runner;
+    @Autowired
+    RetentionProperties retention;
 
     @BeforeEach
     void clean() {
@@ -64,9 +67,10 @@ class EgressCollectorIntegrationTest extends AbstractIntegrationTest {
     }
 
     private EgressCollector collector(PrometheusClient prometheus, Instant now, int maxWindows, int maxRows) {
+        Clock clock = Clock.fixed(now, ZoneOffset.UTC);
         return new EgressCollector(prometheus, repository, enrichment, state,
                 new EgressProperties("10.42.0.0/16", "10.43.0.0/16", "192.168.1.0/24", maxWindows, maxRows), runner,
-                Clock.fixed(now, ZoneOffset.UTC));
+                clock, new EgressDailyRepair(repository, retention, clock));
     }
 
     private EgressCollector collector(PrometheusClient prometheus) {
