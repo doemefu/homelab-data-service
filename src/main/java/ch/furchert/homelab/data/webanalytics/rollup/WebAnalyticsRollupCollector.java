@@ -51,6 +51,8 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
     static final Duration MARGIN = Duration.ofHours(6);
     static final int UNIQUES_7D = 7;
     static final int UNIQUES_28D = 28;
+    /** A fault that hits every day (slow scan, overloaded database) stops the backfill after this many in a row. */
+    static final int MAX_CONSECUTIVE_BACKFILL_FAILURES = 3;
 
     private static final Logger log = LoggerFactory.getLogger(WebAnalyticsRollupCollector.class);
 
@@ -175,7 +177,8 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
      * by netmon's retention and therefore partial) to yesterday that has no baseline row yet. On an empty table this
      * is the one-time pre-launch backfill; when a run fails part-way, the next run resumes with the days still
      * missing. Each day is its own statement and transaction ({@link #backfillCfBaselineDay}), so one slow day
-     * (statement timeout) cannot block the others. Exempt from {@link RollupPlanner#eligible}: it writes neither
+     * (statement timeout) cannot block the others; after {@link #MAX_CONSECUTIVE_BACKFILL_FAILURES} failed days in a
+     * row the run stops and leaves the remaining days to the next run. Exempt from {@link RollupPlanner#eligible}: it writes neither
      * event-derived tables nor {@code rollup_day}. Nothing in netmon yet → nothing written, retried next run.
      *
      * @return false when the advisory lock was held (the run stops there), true otherwise
@@ -191,6 +194,8 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         }
         int filled = 0;
         int failed = 0;
+        int consecutive = 0;
+        boolean deferred = false;
         String failure = null;
         for (LocalDate day : missing == null ? List.<LocalDate>of() : missing) {
             try {
@@ -199,11 +204,16 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
                     return false;
                 }
                 filled++;
+                consecutive = 0;
             } catch (RuntimeException e) {
                 log.warn("[{}] CF baseline backfill day={} failed: {}", NAME, day, e.getClass().getSimpleName());
                 failed++;
                 if (failure == null) {
                     failure = e.getClass().getSimpleName();
+                }
+                if (++consecutive >= MAX_CONSECUTIVE_BACKFILL_FAILURES) {
+                    deferred = true;
+                    break;
                 }
             }
         }
@@ -211,7 +221,8 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
             log.info("[{}] CF baseline backfill days={} failed={}", NAME, filled, failed);
         }
         if (failed > 0) {
-            problems.add("CF baseline backfill: " + failed + " day(s) failed (" + failure + ")");
+            problems.add("CF baseline backfill: " + failed + " day(s) failed (" + failure + ")"
+                    + (deferred ? ", remaining days deferred" : ""));
         }
         return true;
     }

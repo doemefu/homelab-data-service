@@ -10,7 +10,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 (eMudhra compromise) are not trusted: a temporary build step deleted them from the JRE cacerts (#38, #39; doemefu/homelab#212) until Temurin 25.0.5+8, whose cacerts no longer contain them; the step is removed (doemefu/homelab#212).
 
 ### Changed
-- Cloudflare-baseline backfill in per-day chunks (#55): every missing day from netmon's second day to yesterday is written in its own statement and transaction, so one timed-out day no longer blocks the rest; a failed run resumes with the days still missing, filled days are skipped, and the nightly replaces of rolled days no longer wait for a completed backfill.
+- Cloudflare-baseline backfill in per-day chunks (#55): every missing day from netmon's second day to yesterday is written in its own statement and transaction, so one timed-out day no longer blocks the rest (three failures in a row defer the remaining days to the next run); a failed run resumes with the days still missing, filled days are skipped, and the nightly replaces of rolled days no longer wait for a completed backfill.
 - `/coverage` also starts its comparison window at `definitionFrom` (#55), so a go-live date before the first definition-2 day never counts submissions of days without `daily_submits`.
 
 ### Added
