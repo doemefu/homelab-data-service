@@ -102,6 +102,12 @@ spec:
                   name: data-service-secrets
                   key: auth-client-secret
                   optional: true
+            # Web analytics rollup (docs/100 §7.5, homelab-data-service#54): enabled after gate N1
+            # (doemefu/homelab#350, playbook 41 run 2026-11-08). Binds only because application.yaml keeps the
+            # explicit `netmon.collectors.webanalytics-rollup.enabled: false`; rollback = remove this entry
+            # (or set "false").
+            - name: NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED
+              value: "true"
             # docs/060 §9 baseline, except MaxMetaspaceSize: NM-0 alone measured ~56 MB of metaspace
             # after startup and first requests (87% of the 64m baseline), so the cap is 96m.
             - name: JAVA_TOOL_OPTIONS

@@ -57,6 +57,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - `k8s/deployment.yaml`: `CLOUDFLARE_GRAPHQL_URL`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `ABUSEIPDB_API_KEY` (Secret keys `optional: true`).
 
 ### Changed
+- `k8s/deployment.yaml`: the `webanalytics-rollup` collector is enabled (#54) with `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED: "true"`, after gate N1 (doemefu/homelab#350); rollback = remove the entry or set it to `"false"`.
 - `DEPLOYMENT.md`: restart the pod with `kubectl -n apps delete pod -l app=data-service` instead of `kubectl rollout restart`, because Flux strips the restart annotation on its next apply.
 - The freshness gauge is registered only for collectors that are enabled and able to succeed. A collector switched off, `reputation` without a key, or a Cloudflare collector without credentials therefore cannot trip `NetmonCollectorStale`.
 - Cloudflare request groups carry no ASN (`httpRequestsAdaptiveGroups` does not offer it; probe 2026-09-24). `inbound_request_groups` has no `asn`/`asn_org` columns, and ASN reaches `ip_enrichment` from firewall events only.
