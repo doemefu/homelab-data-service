@@ -326,10 +326,11 @@ public class RollupRepository {
                         .addValue("at", utc(rollupDay.rolledUpAt())));
     }
 
-    /** Whether {@code daily_cf_baseline} holds no row at all (the one-time backfill condition). */
-    public boolean cfBaselineEmpty() {
-        return Boolean.FALSE.equals(named.getJdbcTemplate().queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM webanalytics.daily_cf_baseline)", Boolean.class));
+    /** The days in [first, last] that already have {@code daily_cf_baseline} rows (the backfill skips them). */
+    public List<LocalDate> cfBaselineDays(LocalDate first, LocalDate last) {
+        return named.queryForList("SELECT DISTINCT day FROM webanalytics.daily_cf_baseline "
+                        + "WHERE day >= :first AND day <= :last",
+                new MapSqlParameterSource("first", first).addValue("last", last), LocalDate.class);
     }
 
     /** First {@code window_start} netmon still holds, or null. */
@@ -359,8 +360,8 @@ public class RollupRepository {
     }
 
     /**
-     * Replaces the baseline rows of the Zurich days in [from, to) with netmon's current rows (nightly: one day;
-     * backfill: a range). {@code zone} is the analytics time zone name.
+     * Replaces the baseline rows of the Zurich days in [from, to) with netmon's current rows (nightly and backfill:
+     * one day per call). {@code zone} is the analytics time zone name.
      */
     public int replaceCfBaseline(LocalDate firstDay, LocalDate lastDay, Instant from, Instant to, String zone) {
         named.update("DELETE FROM webanalytics.daily_cf_baseline WHERE day >= :first AND day <= :last",

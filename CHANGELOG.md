@@ -9,6 +9,10 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - Deployment hardening (#24): `runAsNonRoot` (uid 100 / gid 101), `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem with an `emptyDir` at `/tmp`.
 - emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 (eMudhra compromise) are not trusted: a temporary build step deleted them from the JRE cacerts (#38, #39; doemefu/homelab#212) until Temurin 25.0.5+8, whose cacerts no longer contain them; the step is removed (doemefu/homelab#212).
 
+### Changed
+- Cloudflare-baseline backfill in per-day chunks (#55): every missing day from netmon's second day to yesterday is written in its own statement and transaction, so one timed-out day no longer blocks the rest; a failed run resumes with the days still missing, filled days are skipped, and the nightly replaces of rolled days no longer wait for a completed backfill.
+- `/coverage` also starts its comparison window at `definitionFrom` (#55), so a go-live date before the first definition-2 day never counts submissions of days without `daily_submits`.
+
 ### Added
 - WA-3b (#55, docs/100 §7.5-§8.5, rev 3.5): Flyway `V8__webanalytics_path_aggregates` with `daily_transition`, `daily_funnel`, `daily_group_path`, `daily_entry_exit`, `daily_intent_seen`, `daily_dimension` (visits and engaged visits, no conversions), `daily_cf_baseline` (from netmon request groups, no IP) and `daily_submits`; rollup definition 2 (the last 30 days are recomputed).
 - Rollup: ordered funnels F1/F2, page-group paths, transitions, entry × exit, seen-before, audience dimensions, submits by submission day; Cloudflare baseline in a separate non-fatal step with a one-time backfill.

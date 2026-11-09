@@ -28,9 +28,9 @@ import java.util.stream.Collectors;
 
 /**
  * WA-3b read endpoints {@code GET /api/webanalytics/funnels}, {@code /paths}, {@code /audience}, {@code /coverage}
- * (docs/100 §8.1, §8.2, rev 3.5). Final days only; {@code /funnels} and {@code /paths} start at
- * {@code definitionFrom} (first day of the current rollup definition). Access control and no-store headers come from
- * the {@code /api/webanalytics/**} chain.
+ * (docs/100 §8.1, §8.2, rev 3.5). Final days only; {@code /funnels}, {@code /paths} and the {@code /coverage}
+ * window start at {@code definitionFrom} (first day of the current rollup definition). Access control and no-store
+ * headers come from the {@code /api/webanalytics/**} chain.
  */
 @RestController
 @RequestMapping("/api/webanalytics")
@@ -162,8 +162,11 @@ public class WebAnalyticsJourneyController {
         // baselineFrom is null while the go-live date is unset or still in the future (rev 3.5).
         LocalDate baselineFrom = goLiveDate == null || goLiveDate.isAfter(LocalDate.now(clock.withZone(zone)))
                 ? null : goLiveDate;
-        LocalDate windowFrom = r == null || baselineFrom == null ? null
-                : (r.from().isBefore(baselineFrom) ? baselineFrom : r.from());
+        // The window also starts at definitionFrom: daily_submits exists for current-definition days only, so an
+        // earlier day would count its submissions against 0 consented ones. No such day → empty window.
+        LocalDate definitionFrom = queries.definitionFrom(RollupPlanner.DEFINITION_VERSION).orElse(null);
+        LocalDate windowFrom = r == null || baselineFrom == null || definitionFrom == null ? null
+                : latest(r.from(), baselineFrom, definitionFrom);
         if (windowFrom == null || windowFrom.isAfter(r.to())) {
             return new ReadDtos.CoverageResponse(ReadParams.rangeDto(q), q.filters(), baselineFrom, List.of(),
                     List.of(), new ReadDtos.Enquiries(0, 0), quality);
@@ -195,6 +198,16 @@ public class WebAnalyticsJourneyController {
                 queries.enquiriesTotal(windowFrom, windowTo));
         return new ReadDtos.CoverageResponse(ReadParams.rangeDto(q), q.filters(), baselineFrom, daily, byPage,
                 enquiries, quality);
+    }
+
+    private static LocalDate latest(LocalDate first, LocalDate... others) {
+        LocalDate latest = first;
+        for (LocalDate d : others) {
+            if (d.isAfter(latest)) {
+                latest = d;
+            }
+        }
+        return latest;
     }
 
     private ReadParams.Query parse(String from, String to, String compare, String locale, String device,
