@@ -91,6 +91,15 @@ class EgressMigrationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void v10AddsThePartialIndexOnExternalRows() {
+        assertThat(jdbc.sql("""
+                        SELECT indexdef FROM pg_indexes
+                        WHERE schemaname = 'netmon' AND indexname = 'egress_flow_snapshots_external_idx'
+                        """).query(String.class).single())
+                .contains("(window_start)").contains("WHERE (destination_scope = 'external'::text)");
+    }
+
+    @Test
     void dailyChecksRejectValuesOutsideTheContract() {
         assertThatThrownBy(() -> daily("'2026-09-24'", "'internet'", 1, "NULL", "NULL"))
                 .isInstanceOf(DataIntegrityViolationException.class);

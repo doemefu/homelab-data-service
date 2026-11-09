@@ -38,6 +38,13 @@ public class EgressQueryRepository {
      */
     static final Duration RAW_GRACE = Duration.ofHours(1);
 
+    /**
+     * Hourly rows have {@code window_end = window_start + 1 h} (V4 CHECK), so {@code window_end > from} equals
+     * {@code window_start > from − 1 h}. The query states both: the second bounds the {@code (window_start)} indexes
+     * from below, otherwise every call reads the whole table (data-service#57 follow-up, 2026-11-09).
+     */
+    static final Duration HOURLY_WINDOW = Duration.ofHours(1);
+
     private final JdbcClient jdbc;
     private final Clock clock;
     private final int rawDays;
@@ -70,7 +77,8 @@ public class EgressQueryRepository {
                                    s.is_new, 1 AS hourly_rows
                             FROM netmon.egress_flow_snapshots s
                             WHERE s.window_start < :to AND s.window_end > :rawFrom
-                              AND (CAST(:scope AS text) IS NULL OR s.destination_scope = CAST(:scope AS text))
+                              AND s.window_start > :rawFromMinusWindow
+                              %1$s
                               AND (CAST(:namespace AS text) IS NULL OR s.namespace = CAST(:namespace AS text))
                               AND (CAST(:workload AS text) IS NULL OR s.workload = CAST(:workload AS text))
                             UNION ALL
@@ -79,7 +87,7 @@ public class EgressQueryRepository {
                                    d.connects, d.failed_connects, d.first_window, d.is_new, d.hourly_rows
                             FROM netmon.egress_flow_daily d
                             WHERE d.day >= :dailyFrom AND d.day < :dailyTo
-                              AND (CAST(:scope AS text) IS NULL OR d.destination_scope = CAST(:scope AS text))
+                              %2$s
                               AND (CAST(:namespace AS text) IS NULL OR d.namespace = CAST(:namespace AS text))
                               AND (CAST(:workload AS text) IS NULL OR d.workload = CAST(:workload AS text))
                         ),
@@ -116,12 +124,12 @@ public class EgressQueryRepository {
                                  a.namespace NULLS LAST, a.workload NULLS LAST, a.container NULLS LAST,
                                  a.destination_host, a.destination_port
                         LIMIT :limit
-                        """)
+                        """.formatted(scopeClause(scope, "s"), scopeClause(scope, "d")))
                 .param("to", utc(window.to()))
                 .param("rawFrom", utc(rawFrom))
+                .param("rawFromMinusWindow", utc(rawFrom.minus(HOURLY_WINDOW)))
                 .param("dailyFrom", dailyFrom)
                 .param("dailyTo", dailyTo)
-                .param("scope", scope)
                 .param("namespace", namespace)
                 .param("workload", workload)
                 .param("limit", limit)
@@ -145,7 +153,8 @@ public class EgressQueryRepository {
                                bool_or(s.is_new)                                                            AS is_new
                         FROM netmon.egress_flow_snapshots s
                         WHERE s.window_start < :to AND s.window_end > :from
-                          AND (CAST(:scope AS text) IS NULL OR s.destination_scope = CAST(:scope AS text))
+                          AND s.window_start > :fromMinusWindow
+                          %s
                           AND (CAST(:namespace AS text) IS NULL OR s.namespace = CAST(:namespace AS text))
                           AND (CAST(:workload AS text) IS NULL OR s.workload = CAST(:workload AS text))
                         GROUP BY s.namespace, s.workload, s.container, s.destination_host, s.destination_port
@@ -153,15 +162,32 @@ public class EgressQueryRepository {
                                  s.namespace NULLS LAST, s.workload NULLS LAST, s.container NULLS LAST,
                                  s.destination_host, s.destination_port
                         LIMIT :limit
-                        """)
+                        """.formatted(scopeClause(scope, "s")))
                 .param("from", utc(window.from()))
+                .param("fromMinusWindow", utc(window.from().minus(HOURLY_WINDOW)))
                 .param("to", utc(window.to()))
-                .param("scope", scope)
                 .param("namespace", namespace)
                 .param("workload", workload)
                 .param("limit", limit)
                 .query((rs, i) -> item(rs))
                 .list();
+    }
+
+    /**
+     * The scope filter as fixed SQL text: {@code external} becomes the literal predicate
+     * {@code destination_scope = 'external'}, so every plan (also a generic prepared one) can use the partial index
+     * {@code egress_flow_snapshots_external_idx} (V10); null means all scopes. A bound parameter in
+     * {@code (:scope IS NULL OR scope = :scope)} would keep a generic plan from using it. Other values never reach
+     * here ({@code EgressController} allows only {@code external} and {@code all}).
+     */
+    static String scopeClause(String scope, String alias) {
+        if (scope == null) {
+            return "";
+        }
+        if (!"external".equals(scope)) {
+            throw new IllegalArgumentException("unsupported egress scope");
+        }
+        return "AND " + alias + ".destination_scope = 'external'";
     }
 
     private static EgressTopItem item(ResultSet rs) throws SQLException {
