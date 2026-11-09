@@ -14,6 +14,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -34,6 +35,11 @@ import java.util.UUID;
  * never appear in {@code accepted}/{@code duplicates}; an invalid enquiry counts as rejected in the response and
  * the metric, but never in {@code daily_ingest_stats}. Metrics are recorded after commit and enquiry reservations
  * are released on rollback, so a retried 500 neither double-counts nor loses anything.
+ *
+ * <p>WA-5 (docs/100 §6.3-§6.5): the batch first takes the shared side of the erasure barrier; events of a tombstoned
+ * visitor are rejected ({@code erased}); the per-visitor cap rejects the excess individually ({@code visitor_cap});
+ * the daily/hourly caps are all-or-nothing: {@link IngestCappedException} rolls the whole batch back. Goal and
+ * enquiry are cap-exempt, so a batch without analytics events is never capped.
  */
 @Service
 public class IngestService {
@@ -50,10 +56,12 @@ public class IngestService {
     private final Clock clock;
     private final ZoneId zone;
     private final IngestActivity activity;
+    private final IngestCaps caps;
+    private final Tombstones tombstones;
 
     public IngestService(EventValidator validator, WebAnalyticsRepository repository, EnquiryDeduplicator enquiries,
                          WebAnalyticsMetrics metrics, Clock clock, WebAnalyticsProperties properties,
-                         IngestActivity activity) {
+                         IngestActivity activity, IngestCaps caps, Tombstones tombstones) {
         this.validator = validator;
         this.repository = repository;
         this.enquiries = enquiries;
@@ -61,6 +69,8 @@ public class IngestService {
         this.clock = clock;
         this.zone = properties.timezone();
         this.activity = activity;
+        this.caps = caps;
+        this.tombstones = tombstones;
     }
 
     private record PageviewSeq(UUID pageviewId, int seq) {
@@ -76,9 +86,11 @@ public class IngestService {
         Map<String, Integer> edgeDrops = new LinkedHashMap<>(request.edgeDrops().byReason());
         int[] counters = new int[2]; // accepted, duplicates
         List<ValidEvent> stored = new ArrayList<>();
-        registerCompletion(reservedEnquiries, rejected, edgeDrops, counters, stored);
+        IngestCaps.Reservation[] reservation = new IngestCaps.Reservation[1];
+        registerCompletion(reservedEnquiries, rejected, edgeDrops, counters, stored, reservation);
 
         repository.applyStatementTimeout();
+        repository.lockIngestShared();
         Instant now = clock.instant();
         SortedMap<LocalDate, Long> enquiryDays = new TreeMap<>();
         List<ValidEvent> candidates = new ArrayList<>();
@@ -95,6 +107,11 @@ public class IngestService {
                 continue;
             }
             ValidEvent event = result.event();
+            if (event.visitorId() != null && tombstones.contains(event.visitorId())) {
+                rejected.merge(RejectReason.ERASED, 1, Integer::sum);
+                statsRejected.merge(RejectReason.ERASED, 1, Integer::sum);
+                continue;
+            }
             if (event.isEnquiry()) {
                 if (enquiries.reserve(event.eventId())) {
                     reservedEnquiries.add(event.eventId());
@@ -121,6 +138,8 @@ public class IngestService {
 
         List<ValidEvent> toInsert = classifyAgainstStored(candidates, batchIds, batchKeys, rejected, statsRejected,
                 counters);
+        reservation[0] = applyCaps(toInsert, rejected, statsRejected);
+        toInsert.sort(Comparator.comparing(ValidEvent::eventId));
         int[] insertCounts = repository.insertEvents(toInsert, source);
         for (int i = 0; i < insertCounts.length; i++) {
             if (insertCounts[i] == 0) {
@@ -139,13 +158,37 @@ public class IngestService {
                 Map.copyOf(edgeDrops));
     }
 
-    /** Drops stored duplicates and rejects stored-key reuse; returns the rest sorted by event id. */
+    /**
+     * Per-visitor cap (excess rejected, removed from {@code toInsert}) and the all-or-nothing daily/hourly caps on the
+     * batch's analytics events; throws {@link IngestCappedException} when capped. Returns the reservation.
+     */
+    private IngestCaps.Reservation applyCaps(List<ValidEvent> toInsert, Map<RejectReason, Integer> rejected,
+                                             Map<RejectReason, Integer> statsRejected) {
+        List<ValidEvent> analytics = toInsert.stream().filter(e -> !EventValidator.GOAL.equals(e.type())).toList();
+        Set<UUID> unseen = caps.unseenVisitors(analytics.stream().map(ValidEvent::visitorId).toList());
+        Map<UUID, Long> seeds = unseen.isEmpty() ? Map.of()
+                : repository.analyticsOfVisitorsOnDay(unseen,
+                        LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant());
+        IngestCaps.Decision decision = caps.reserve(analytics, seeds);
+        if (decision.capped() != null) {
+            throw new IngestCappedException(decision.capped());
+        }
+        if (!decision.visitorCapped().isEmpty()) {
+            toInsert.removeIf(e -> decision.visitorCapped().contains(e.eventId()));
+            int n = decision.visitorCapped().size();
+            rejected.merge(RejectReason.VISITOR_CAP, n, Integer::sum);
+            statsRejected.merge(RejectReason.VISITOR_CAP, n, Integer::sum);
+        }
+        return decision.reservation();
+    }
+
+    /** Drops stored duplicates and rejects stored-key reuse; returns the rest in batch order. */
     private List<ValidEvent> classifyAgainstStored(List<ValidEvent> candidates, Set<UUID> batchIds,
                                                    Map<PageviewSeq, UUID> batchKeys,
                                                    Map<RejectReason, Integer> rejected,
                                                    Map<RejectReason, Integer> statsRejected, int[] counters) {
         if (candidates.isEmpty()) {
-            return List.of();
+            return new ArrayList<>();
         }
         List<Object[]> pairs = batchKeys.keySet().stream()
                 .map(key -> new Object[]{key.pageviewId(), key.seq()})
@@ -170,7 +213,6 @@ public class IngestService {
                 toInsert.add(event);
             }
         }
-        toInsert.sort(Comparator.comparing(ValidEvent::eventId));
         return toInsert;
     }
 
@@ -195,15 +237,16 @@ public class IngestService {
      * The arguments are filled while the batch is processed.
      */
     private void registerCompletion(List<UUID> reservedEnquiries, Map<RejectReason, Integer> rejected,
-                                    Map<String, Integer> edgeDrops, int[] counters, List<ValidEvent> stored) {
+                                    Map<String, Integer> edgeDrops, int[] counters, List<ValidEvent> stored,
+                                    IngestCaps.Reservation[] reservation) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 metrics.record(new IngestOutcome(counters[0], counters[1], reservedEnquiries.size(),
                         Map.copyOf(rejected), Map.copyOf(edgeDrops)));
-                activity.recordStored(
-                        stored.stream().filter(e -> !EventValidator.GOAL.equals(e.type()))
-                                .map(ValidEvent::receivedAt).toList(),
+                caps.commit(reservation[0],
+                        stored.stream().filter(e -> !EventValidator.GOAL.equals(e.type())).toList());
+                activity.recordNewest(
                         stored.stream().map(ValidEvent::receivedAt).max(Comparator.naturalOrder()).orElse(null));
             }
 
@@ -211,6 +254,7 @@ public class IngestService {
             public void afterCompletion(int status) {
                 if (status != STATUS_COMMITTED) {
                     reservedEnquiries.forEach(enquiries::release);
+                    caps.release(reservation[0]);
                 }
             }
         });

@@ -119,8 +119,11 @@ class WebAnalyticsSecurityIntegrationTest extends AbstractIntegrationTest {
         mockMvc.perform(get("/api/webanalytics/status").header("Authorization", "Bearer " + WebAnalyticsFixtures.writeToken()))
                 .andExpect(status().isForbidden())
                 .andExpect(header().string("Cache-Control", "no-store"));
-        mockMvc.perform(post("/api/webanalytics/visitors/x").header("Authorization", "Bearer " + WebAnalyticsFixtures.writeToken()))
+        mockMvc.perform(post("/api/webanalytics/unknown").header("Authorization", "Bearer " + WebAnalyticsFixtures.writeToken()))
                 .andExpect(status().isForbidden());
+        // WA-5: /visitors/{id} is a write path; another method gets 405 from MVC.
+        mockMvc.perform(post("/api/webanalytics/visitors/x").header("Authorization", "Bearer " + WebAnalyticsFixtures.writeToken()))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     private ResultActions postWith(String token) throws Exception {

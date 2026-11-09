@@ -79,10 +79,15 @@ public final class IngestDtos {
         }
     }
 
-    /**
-     * Response 200 (docs/100 §6.2). Enquiries appear in none of the counters; {@code capped} is always false
-     * until the WA-5 caps exist.
-     */
+    /** Response 200 (docs/100 §6.2). Enquiries appear in none of the counters; {@code capped} is false. */
     public record IngestResponse(int accepted, int duplicates, int rejected, boolean capped) {
+    }
+
+    /**
+     * Response 429 of a capped batch (docs/100 §6.3): all counters 0, {@code capped} true, {@code capScope}
+     * {@code hour} or {@code day}, {@code retryAt} ISO-8601 UTC in whole seconds.
+     */
+    public record CappedResponse(int accepted, int duplicates, int rejected, boolean capped, String capScope,
+                                 String retryAt) {
     }
 }

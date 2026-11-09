@@ -115,9 +115,49 @@ class RollupPlannerTest {
     void eligibilityRejectsTodayAndDaysBeforeTheFirstRolledDay() {
         Instant now = zurich("2026-11-09T07:30:00");
         LocalDate first = LocalDate.parse("2026-11-01");
-        assertThat(planner.eligible(LocalDate.parse("2026-11-09"), now, first)).isFalse();
-        assertThat(planner.eligible(LocalDate.parse("2026-10-31"), now, first)).isFalse();
-        assertThat(planner.eligible(LocalDate.parse("2026-11-01"), now, first)).isTrue();
+        assertThat(planner.eligible(LocalDate.parse("2026-11-09"), now, first, null)).isFalse();
+        assertThat(planner.eligible(LocalDate.parse("2026-10-31"), now, first, null)).isFalse();
+        assertThat(planner.eligible(LocalDate.parse("2026-11-01"), now, first, null)).isTrue();
+    }
+
+    @Test
+    void freezeGuardBoundsTheRetentionFromTheConfiguredValue() {
+        // (b) day >= today - (retentionDays - 1), here with a non-default retention of 370 days.
+        RollupPlanner short370 = new RollupPlanner(days, 370);
+        Instant now = zurich("2026-11-09T07:30:00");
+        LocalDate today = LocalDate.parse("2026-11-09");
+        assertThat(short370.eligible(today.minusDays(369), now, null, null)).isTrue();
+        assertThat(short370.eligible(today.minusDays(370), now, null, null)).isFalse();
+        assertThat(planner.eligible(today.minusDays(370), now, null, null)).isTrue(); // default 396
+    }
+
+    @Test
+    void freezeGuardRecomputesARolledDayOnlyWithin30Days() {
+        // (c) day >= today - 30 or no rollup_day row; (a) day < today.
+        Instant now = zurich("2026-11-09T07:30:00");
+        LocalDate today = LocalDate.parse("2026-11-09");
+        RolledDay old = new RolledDay(today.minusDays(31), false, RollupPlanner.DEFINITION_VERSION);
+        RolledDay edge = new RolledDay(today.minusDays(30), false, RollupPlanner.DEFINITION_VERSION);
+        assertThat(planner.eligible(old.day(), now, null, old)).isFalse();
+        assertThat(planner.eligible(edge.day(), now, null, edge)).isTrue();
+        assertThat(planner.eligible(today.minusDays(31), now, null, null)).isTrue(); // missing day
+        assertThat(planner.eligible(today, now, null, null)).isFalse();
+    }
+
+    @Test
+    void planDropsOldNonFinalAndPurgedDays() {
+        RollupPlanner short370 = new RollupPlanner(days, 370);
+        Instant now = zurich("2026-11-09T07:30:00");
+        LocalDate today = LocalDate.parse("2026-11-09");
+        List<RolledDay> rolled = List.of(
+                new RolledDay(today.minusDays(372), true, RollupPlanner.DEFINITION_VERSION), // first rolled day
+                new RolledDay(today.minusDays(40), false, RollupPlanner.DEFINITION_VERSION),
+                new RolledDay(today.minusDays(2), false, RollupPlanner.DEFINITION_VERSION));
+        List<LocalDate> plan = short370.plan(now, rolled);
+        // Refused missing days do not use up the 31-day gap budget: the scan starts at the retention bound.
+        assertThat(plan).doesNotContain(today.minusDays(371), today.minusDays(370), today.minusDays(40))
+                .contains(today.minusDays(369), today.minusDays(339), today.minusDays(2))
+                .doesNotContain(today.minusDays(338));
     }
 
     private static RolledDay rolled(String day, boolean fin) {

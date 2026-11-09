@@ -30,10 +30,14 @@ class WebAnalyticsMetricsIntegrationTest extends AbstractIntegrationTest {
         assertThat(scrape).contains("webanalytics_events_accepted_total ", "webanalytics_events_duplicate_total ",
                 "webanalytics_enquiries_total ");
         assertThat(labels(scrape, "webanalytics_events_rejected_total"))
-                .containsExactlyInAnyOrder("shape", "enum", "range", "time", "path", "other");
+                .containsExactlyInAnyOrder("shape", "enum", "range", "time", "path", "other", "erased", "visitor_cap");
         assertThat(labels(scrape, "webanalytics_edge_dropped_total"))
                 .containsExactlyInAnyOrder("bot", "signed_in", "consent", "invalid", "path", "rate_limited",
                         "mint_limited", "overflow", "expired");
+        // WA-5 gauges: registered at startup (raw table bytes after the first measurement at ApplicationReady).
+        assertThat(scrape).containsPattern("(?m)^webanalytics_ingest_capped 0\\.0$")
+                .containsPattern("(?m)^webanalytics_events_today [0-9.E]+$")
+                .containsPattern("(?m)^webanalytics_raw_table_bytes [1-9][0-9.E]*$");
         // Every webanalytics series carries no label other than reason.
         List<String> lines = scrape.lines().filter(l -> l.startsWith("webanalytics_")).toList();
         assertThat(lines).allSatisfy(l -> assertThat(l.replaceAll("reason=\"[a-z_]+\"", ""))

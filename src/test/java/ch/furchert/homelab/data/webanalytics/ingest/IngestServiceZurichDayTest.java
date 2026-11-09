@@ -109,7 +109,8 @@ class IngestServiceZurichDayTest {
                 new WebAnalyticsProperties.Api(List.of("furchert-ch"), List.of("furchert-ch")), ZoneId.of("Europe/Zurich"),
                 new WebAnalyticsProperties.Coverage(null));
         return new IngestService(new EventValidator(), repository, dedupe, new WebAnalyticsMetrics(registry),
-                Clock.fixed(now, ZoneOffset.UTC), properties, new IngestActivity(Clock.fixed(now, ZoneOffset.UTC)));
+                Clock.fixed(now, ZoneOffset.UTC), properties, new IngestActivity(caps(now, properties)),
+                caps(now, properties), new Tombstones(Clock.fixed(now, ZoneOffset.UTC)));
     }
 
     private static IngestRequest batchOf(Map<String, Object> event) {
@@ -123,4 +124,11 @@ class IngestServiceZurichDayTest {
         return captor.getValue();
     }
 
+
+    private static IngestCaps caps(Instant now, WebAnalyticsProperties properties) {
+        IngestCaps caps = new IngestCaps(Clock.fixed(now, ZoneOffset.UTC), properties);
+        caps.seedStarted();
+        caps.seedCompleted(Map.of());
+        return caps;
+    }
 }

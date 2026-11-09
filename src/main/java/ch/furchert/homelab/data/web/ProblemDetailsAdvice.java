@@ -58,7 +58,7 @@ public class ProblemDetailsAdvice extends ResponseEntityExceptionHandler {
         }
         if (request instanceof NativeWebRequest nativeRequest
                 && nativeRequest.getNativeRequest(HttpServletRequest.class) instanceof HttpServletRequest servletRequest) {
-            problem.setInstance(URI.create(servletRequest.getRequestURI()));
+            problem.setInstance(URI.create(ProblemInstance.of(servletRequest.getRequestURI())));
         }
     }
 }

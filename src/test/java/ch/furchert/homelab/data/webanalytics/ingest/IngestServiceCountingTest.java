@@ -49,7 +49,8 @@ class IngestServiceCountingTest {
                 new WebAnalyticsProperties.Coverage(null));
         service = new IngestService(new EventValidator(), repository,
                 new EnquiryDeduplicator(Clock.fixed(NOW, ZoneOffset.UTC)), new WebAnalyticsMetrics(new SimpleMeterRegistry()),
-                Clock.fixed(NOW, ZoneOffset.UTC), properties, new IngestActivity(Clock.fixed(NOW, ZoneOffset.UTC)));
+                Clock.fixed(NOW, ZoneOffset.UTC), properties, new IngestActivity(caps(NOW, properties)),
+                caps(NOW, properties), new Tombstones(Clock.fixed(NOW, ZoneOffset.UTC)));
     }
 
     @AfterEach
@@ -110,5 +111,12 @@ class IngestServiceCountingTest {
         ArgumentCaptor<SortedMap<StatsKey, Long>> captor = ArgumentCaptor.forClass(SortedMap.class);
         verify(repository).incrementIngestStats(any(), captor.capture());
         return captor.getValue();
+    }
+
+    private static IngestCaps caps(Instant now, WebAnalyticsProperties properties) {
+        IngestCaps caps = new IngestCaps(Clock.fixed(now, ZoneOffset.UTC), properties);
+        caps.seedStarted();
+        caps.seedCompleted(Map.of());
+        return caps;
     }
 }

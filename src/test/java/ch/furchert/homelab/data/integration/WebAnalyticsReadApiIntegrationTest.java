@@ -58,10 +58,12 @@ class WebAnalyticsReadApiIntegrationTest extends AbstractIntegrationTest {
         get("/api/webanalytics/status")
                 .andExpect(jsonPath("$.lastCompleteDay").value(nullValue()))
                 .andExpect(jsonPath("$.provisionalDay").value(nullValue()))
-                .andExpect(jsonPath("$.rawRetentionStart").value(nullValue()))
+                // WA-5: the freeze-guard (b) bound with the shipped 396-day retention, the daily cap, not capped.
+                .andExpect(jsonPath("$.rawRetentionStart")
+                        .value(java.time.LocalDate.now(java.time.ZoneId.of("Europe/Zurich")).minusDays(395).toString()))
                 .andExpect(jsonPath("$.definitionVersion").value(RollupPlanner.DEFINITION_VERSION))
-                .andExpect(jsonPath("$.ingest.dailyCap").value(nullValue()))
-                .andExpect(jsonPath("$.ingest.capped").value(nullValue()));
+                .andExpect(jsonPath("$.ingest.dailyCap").value(10_000))
+                .andExpect(jsonPath("$.ingest.capped").value(false));
         get("/api/webanalytics/pages").andExpect(jsonPath("$.items", hasSize(0)));
     }
 

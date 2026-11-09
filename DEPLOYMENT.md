@@ -243,6 +243,91 @@ WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, addit
 | The same day fails on every run with `QueryTimeoutException` | One Zurich day of netmon request groups exceeds the 120 s statement timeout; the other days are written. Time the day's `SELECT` with `EXPLAIN ANALYZE` in the PostgreSQL pod (index on `netmon.inbound_request_groups.window_start`) |
 | `/funnels`, `/paths` or `/audience` return an empty range, or `/coverage` an empty `daily` although the go-live date has passed | No final day with definition 2 yet, or none after the newest final definition-1 day (for example after a rollback longer than 30 days; `definitionFrom` null) |
 
+## WA-5 rollout (#56): caps, erasure, retention, freeze guard
+
+WA-5 adds the ingest caps (429 `capScope`/`retryAt`, per-visitor cap), `DELETE /api/webanalytics/visitors/{visitorId}` with 2 h tombstones, the 396-day retention of `webanalytics.events`, the rollup freeze guard, the gauges `webanalytics_ingest_capped`, `webanalytics_events_today`, `webanalytics_raw_table_bytes` and the `/status` fields `dailyCap`, `capped`, `rawRetentionStart` (contract `docs/100-web-analytics.md` §6.3-§6.5, §7.5, §7.7, §7.9, §8.2; INTERFACES §1b, §1c, §2). **No migration**, no new Secret key, env var (defaults in `application.yaml`), NetworkPolicy or dependency.
+
+Order (§17): roll this out **before** furchert-ch #157 merges (it needs the 429 and the DELETE) and before homelab #351 PR 2 (the gauge rules).
+
+1. **Merge this PR.** Flux rolls out the new image.
+2. Checks via port-forward (tokens read into variables without echoing them):
+
+   ```bash
+   kubectl -n apps port-forward svc/data-service 8082:8082 &
+   curl -s localhost:8082/actuator/prometheus | grep -E '^webanalytics_(ingest_capped|events_today|raw_table_bytes) '   # three gauges
+   curl -s localhost:8082/actuator/prometheus | grep -E 'webanalytics_events_rejected_total\{reason="(erased|visitor_cap)"\}'   # both at 0
+   curl -s -H "Authorization: Bearer $READ_TOKEN" localhost:8082/api/webanalytics/status   # ingest.dailyCap 10000, capped false, rawRetentionStart = today − 395
+   curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H "Authorization: Bearer $TOKEN" \
+     localhost:8082/api/webanalytics/visitors/00000000-0000-4000-8000-000000000000   # 204 (nothing matched)
+   ```
+
+3. After the next 03:30 UTC run the log contains `[retention] webanalytics.events deleted=0` (it stays 0 until rows older than 396 days exist).
+
+### Runbooks (canonical; the homelab `DEPLOYMENT.md` keeps only the cluster-level steps and links here)
+
+All SQL runs in the PostgreSQL pod: `kubectl -n apps exec -it postgresql-0 -c postgresql -- psql -U postgres -d data_service`. Replace the example date `2026-11-05` (a Zurich day). Every block below is executed as written by `RunbookSqlIntegrationTest`, so keep the `-- runbook:` marker lines.
+
+**Dump first.** Before any manual delete, stream a dump of the schema to the Mac (no copy inside the pod):
+
+```bash
+kubectl -n apps exec postgresql-0 -c postgresql -- pg_dump -U postgres -d data_service -Fc -n webanalytics \
+  > "webanalytics-$(date +%Y%m%dT%H%M%S).dump"
+```
+
+**(1) Purge a poisoned day** (for example a bot burst that got through). Deletes the day's raw events and, in the same transaction, the `rollup_day` rows of D − 1, D and D + 1: visits reach 6 h into the neighbouring days, and without the rows the freeze guard (d) would keep the old aggregates of a final day. The next run (01:12 or 07:30) recomputes the three days (at most 31 missing days per run, only within the raw retention). `daily_ingest_stats` and `daily_enquiries` keep their counts.
+
+```sql
+-- runbook:purge-day
+BEGIN;
+DELETE FROM webanalytics.events
+ WHERE occurred_at >= (DATE '2026-11-05')::timestamp AT TIME ZONE 'Europe/Zurich'
+   AND occurred_at <  (DATE '2026-11-05' + 1)::timestamp AT TIME ZONE 'Europe/Zurich';
+DELETE FROM webanalytics.rollup_day WHERE day BETWEEN DATE '2026-11-05' - 1 AND DATE '2026-11-05' + 1;
+COMMIT;
+```
+
+**(2) Reset D − 1, D, D + 1** (recompute without deleting raw events, for example after a fix). The rows go, the days count as missing and are recomputed by the next run:
+
+```sql
+-- runbook:reset-days
+DELETE FROM webanalytics.rollup_day WHERE day BETWEEN DATE '2026-11-05' - 1 AND DATE '2026-11-05' + 1;
+```
+
+**(3) Re-mark rollup days** (recompute days of the last 30 days on the next run, kept in place until then). Re-marking lifts the freeze guard (d): check first that the raw events are still there (`raw_now` close to `raw_events`), otherwise the recompute writes zeros. Older days: use (2), which deletes the row.
+
+```sql
+-- runbook:remark-days
+SELECT r.day, r.raw_events,
+       (SELECT count(*) FROM webanalytics.events e
+         WHERE e.occurred_at >= r.day::timestamp AT TIME ZONE 'Europe/Zurich'
+           AND e.occurred_at <  (r.day + 1)::timestamp AT TIME ZONE 'Europe/Zurich') AS raw_now
+  FROM webanalytics.rollup_day r WHERE r.day BETWEEN DATE '2026-11-05' AND DATE '2026-11-06' ORDER BY r.day;
+UPDATE webanalytics.rollup_day SET final = false WHERE day BETWEEN DATE '2026-11-05' AND DATE '2026-11-06';
+```
+
+**(4) Adjust caps.** A `k8s/deployment.yaml` PR in this repo (merged, Flux applies it), then `kubectl -n apps delete pod -l app=data-service`; the new pod re-seeds the counts from `events.received_at`:
+
+```yaml
+- name: WEBANALYTICS_INGEST_DAILYCAP      # default 10000
+  value: "20000"
+- name: WEBANALYTICS_INGEST_HOURLYCAP     # default 2500
+  value: "5000"
+- name: WEBANALYTICS_INGEST_VISITORDAILYCAP   # default 500
+  value: "500"
+```
+
+**(5) Stop analytics ingest on the data side.** Prefer furchert-ch's kill switch `ANALYTICS_COLLECT_ENABLED=false` (its repo's DEPLOYMENT), which stops collection at the source. On this side set `WEBANALYTICS_INGEST_DAILYCAP` to `"0"` as in (4): every batch with analytics events gets the capped 429, while goals, enquiries and `DELETE /visitors/{id}` keep working. Side effects: `webanalytics_ingest_capped` is 1 all day, so `WebAnalyticsIngestCapped` fires, and every such day counts in `/coverage.dataQuality.cappedDays`. Do not empty `webanalytics.api.write-clients` for this: it would also block erasure.
+
+### Troubleshooting (WA-5)
+
+| Symptom | Likely cause |
+|---|---|
+| furchert-ch reports 429 for every analytics batch | A cap is reached (`/status` `ingest.capped`, `eventsToday`); the batch's `retryAt` says when it opens; caps of 0 cap everything (runbook (5)) |
+| `/status`: `webanalytics-rollup` `lastErrorCode=partial` "freeze guard kept n day(s)" | A final day lost its raw events (manual delete without the `rollup_day` rows); follow runbook (1) or (2) for that day, or leave it (its aggregates stay as they were) |
+| `DELETE /visitors/{id}` answers 503 | An ingest batch held the barrier for more than 1 s, a statement timed out, or more rows than fit into 2.5 s; furchert-ch retries, the tombstone keeps new rows out, the next call finishes it |
+| WARN `ingest activity seed failed: <class>` at startup | Database not reachable at startup; caps count from 0 and one re-seed runs 5 minutes later |
+| `webanalytics_raw_table_bytes` missing | No successful measurement yet (database unreachable since startup); WARN `raw table size not measured: <class>` |
+
 ## Verification (§11 NM-0)
 
 ```bash
@@ -265,6 +350,7 @@ A token without `netmon:read` must get 403.
 - Code: revert the image tag commit in `k8s/deployment.yaml`, or suspend the Flux Kustomization `data-service`.
 - Schema: migrations are forward-only. An older image ignores newer migrations only if they are additive, so never edit or delete a merged migration.
 - WA-1 (V6, docs/100 §12.4): the previous image starts on a V6 database because Flyway ignores applied future migrations (`spring.flyway.ignore-migration-patterns` default `*:future`, not overridden here). Verified in WA-1 phase 1 and pinned by `WebAnalyticsUpgradeIntegrationTest`. Never edit or undo V6; the `webanalytics` schema simply stays. To stop ingest without a data-service change, set `ANALYTICS_COLLECT_ENABLED=false` in furchert-ch (pod delete).
+- WA-5 (#56): no migration; revert the merge commit or pin the previous image. The previous image ignores the WA-5 settings and the `capped` stats rows, answers 200 again for every batch (no caps, no tombstones) and has no `DELETE /visitors/{id}` (the path is denied with 403, so furchert-ch keeps the forget pending). Rows deleted by retention or erasure cannot be restored (except from a dump), but retention deletes nothing before 396 days after the first event.
 - WA-3b (V8): additive; the previous image (definition 1) starts on a V8 database (`*:future`) and treats definition-2 days as current, so it does not rewrite them; the V8 tables stay. No new dependency.
 - WA-3a (V7): additive; the previous image starts on a V7 database (`*:future`). To stop the rollup without a code change, set `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED` to `"false"` (or remove it; the YAML default is `false`) and delete the pod. If the alternative `SPRING_APPLICATION_JSON` was used to enable it, change it there too: it outranks the env var. Aggregates stay as they are. A re-enabled run only writes days that are missing, provisional days once they have closed, and days on an outdated definition within the last 30 days (final ones included); at most 31 days per category per run, so a long backlog takes several runs. Other final days are not rewritten. WA-3a adds no dependency.
 - Collectors: set `netmon.collectors.<name>.enabled=false` to stop one source without a code change. Collector names contain dashes (for example `cloudflare-requests`), which a plain env var cannot express, so use `SPRING_APPLICATION_JSON` in the deployment:

@@ -5,14 +5,19 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import org.springframework.stereotype.Repository;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /**
@@ -50,10 +55,6 @@ public class WebAnalyticsRepository {
                 DO UPDATE SET submissions = webanalytics.daily_enquiries.submissions + EXCLUDED.submissions
             """;
 
-    /** Startup seed of {@link IngestActivity}: stored cap-counted events since {@code dayStart}, newest receipt. */
-    public record Activity(long capCountedToday, Instant newestReceivedAt) {
-    }
-
     /** An existing row's keys. */
     public record StoredKey(UUID eventId, UUID pageviewId, Integer seq) {
     }
@@ -74,17 +75,92 @@ public class WebAnalyticsRepository {
         this.named = named;
     }
 
-    /** Seed values for {@link IngestActivity} (docs/100 §8.2); runs once at startup, never on a read request. */
-    public Activity activity(Instant dayStart) {
-        // Bounded by the received_at index: today's rows only, and max() as a backward index scan (no full scan).
-        Long today = named.queryForObject("""
-                        SELECT count(*) FROM webanalytics.events
-                        WHERE received_at >= :dayStart AND event_type IN ('pageview', 'engagement', 'click')
+    /**
+     * Startup seed of {@link IngestCaps} (docs/100 §6.4): stored analytics events (pageview, engagement, click) per UTC
+     * hour start of {@code received_at}, from {@code from} on. Bounded by the {@code received_at} index; runs once at
+     * startup, never on a request.
+     */
+    public Map<Instant, Long> analyticsPerHour(Instant from) {
+        Map<Instant, Long> counts = new TreeMap<>();
+        named.query("""
+                        SELECT date_trunc('hour', received_at AT TIME ZONE 'UTC') AS hour, count(*) AS n
+                        FROM webanalytics.events
+                        WHERE received_at >= :from AND event_type IN ('pageview', 'engagement', 'click')
+                        GROUP BY 1
                         """,
-                new MapSqlParameterSource("dayStart", utc(dayStart)), Long.class);
+                new MapSqlParameterSource("from", utc(from)),
+                rs -> {
+                    counts.put(rs.getObject("hour", LocalDateTime.class).toInstant(ZoneOffset.UTC), rs.getLong("n"));
+                });
+        return counts;
+    }
+
+    /** Startup seed of {@link IngestActivity}: the newest {@code received_at} (backward index scan), or null. */
+    public Instant newestReceivedAt() {
         OffsetDateTime newest = named.getJdbcTemplate().queryForObject(
                 "SELECT max(received_at) FROM webanalytics.events", OffsetDateTime.class);
-        return new Activity(today == null ? 0 : today, newest == null ? null : newest.toInstant());
+        return newest == null ? null : newest.toInstant();
+    }
+
+    /**
+     * Per-visitor seed of {@link IngestCaps}: stored analytics events of the given visitors with {@code received_at} in
+     * [dayStart, dayStart + 1 d); visitors without rows are absent. Uses the {@code (visitor_id, occurred_at)} index
+     * ({@code occurred_at >= received_at − 15 min} by the table's CHECK).
+     */
+    public Map<UUID, Long> analyticsOfVisitorsOnDay(Collection<UUID> visitorIds, Instant dayStart) {
+        Map<UUID, Long> counts = new HashMap<>();
+        if (visitorIds.isEmpty()) {
+            return counts;
+        }
+        named.query("""
+                        SELECT visitor_id, count(*) AS n FROM webanalytics.events
+                        WHERE visitor_id IN (:ids) AND occurred_at >= :occurredFrom
+                          AND received_at >= :from AND received_at < :to
+                          AND event_type IN ('pageview', 'engagement', 'click')
+                        GROUP BY visitor_id
+                        """,
+                new MapSqlParameterSource("ids", visitorIds)
+                        .addValue("occurredFrom", utc(dayStart.minus(Duration.ofMinutes(15))))
+                        .addValue("from", utc(dayStart))
+                        .addValue("to", utc(dayStart.plus(Duration.ofDays(1)))),
+                rs -> {
+                    counts.put(rs.getObject("visitor_id", UUID.class), rs.getLong("n"));
+                });
+        return counts;
+    }
+
+    /**
+     * Shared side of the erasure barrier (docs/100 §6.5): every batch takes it first, so the exclusive barrier of an
+     * erasure waits for batches already in flight. Shared locks never block each other.
+     */
+    public void lockIngestShared() {
+        named.getJdbcTemplate().queryForObject(
+                "SELECT pg_advisory_xact_lock_shared(hashtext('webanalytics-ingest'))::text", String.class);
+    }
+
+    /** Exclusive side of the erasure barrier, waiting at most 1 s (lock_timeout), held until the transaction ends. */
+    public void eraseBarrier() {
+        named.getJdbcTemplate().execute("SET LOCAL lock_timeout = '1s'");
+        named.getJdbcTemplate().queryForObject(
+                "SELECT pg_advisory_xact_lock(hashtext('webanalytics-ingest'))::text", String.class);
+    }
+
+    /** Deletes up to {@code limit} rows of the visitor (one erasure batch, 2 s statement timeout); returns the count. */
+    public int deleteVisitorBatch(UUID visitorId, int limit) {
+        named.getJdbcTemplate().execute("SET LOCAL statement_timeout = '2s'");
+        return named.update("""
+                        DELETE FROM webanalytics.events WHERE ctid IN (
+                            SELECT ctid FROM webanalytics.events WHERE visitor_id = :id LIMIT :limit)
+                        """,
+                new MapSqlParameterSource("id", visitorId).addValue("limit", limit));
+    }
+
+    /** Adds {@code events} to {@code daily_ingest_stats(day, 'capped', scope)} (own transaction of the caller). */
+    public void incrementCapped(LocalDate day, String scope, long events) {
+        if (events > 0) {
+            named.update(INCREMENT_STATS, new MapSqlParameterSource("day", day).addValue("stage", "capped")
+                    .addValue("reason", scope).addValue("events", events));
+        }
     }
 
     /** Applies the batch's 2 s statement timeout (docs/100 §6.2) to the current transaction. */
