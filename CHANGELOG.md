@@ -9,10 +9,6 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - Deployment hardening (#24): `runAsNonRoot` (uid 100 / gid 101), `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem with an `emptyDir` at `/tmp`.
 - emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 (eMudhra compromise) are not trusted: a temporary build step deleted them from the JRE cacerts (#38, #39; doemefu/homelab#212) until Temurin 25.0.5+8, whose cacerts no longer contain them; the step is removed (doemefu/homelab#212).
 
-### Changed
-- Cloudflare-baseline backfill in per-day chunks (#55): every missing day from netmon's second day to yesterday is written in its own statement and transaction, so one timed-out day no longer blocks the rest (three failures in a row defer the remaining days to the next run); a failed run resumes with the days still missing, filled days are skipped, and the nightly replaces of rolled days no longer wait for a completed backfill.
-- `/coverage` also starts its comparison window at `definitionFrom` (#55), so a go-live date before the first definition-2 day never counts submissions of days without `daily_submits`.
-
 ### Added
 - WA-5 (#56, docs/100 §6.3-§6.5, §7.5, §7.7, §7.9): daily/hourly caps on accepted analytics events by `received_at` (10 000/day, 2 500/hour, all-or-nothing 429 `{capped, capScope, retryAt}`, goal/enquiry exempt, a capped batch's `edgeDrops` not counted, `daily_ingest_stats` stage `capped`) and a per-visitor cap (500/day, reject reason `visitor_cap`), in one in-memory ledger seeded at startup.
 - `DELETE /api/webanalytics/visitors/{visitorId}` (write access): tombstone (2 h, at most 10 000 ids, reject reason `erased`), barrier against in-flight batches, batched deletes within 2.5 s (503 when incomplete), 204 also when nothing matched; problem bodies carry the path template, never the id.
@@ -62,6 +58,9 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 - `k8s/deployment.yaml`: `CLOUDFLARE_GRAPHQL_URL`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `ABUSEIPDB_API_KEY` (Secret keys `optional: true`).
 
 ### Changed
+- `k8s/deployment.yaml`: the `webanalytics-rollup` collector is enabled (#54) with `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED: "true"`, after gate N1 (doemefu/homelab#350); rollback = remove the entry or set it to `"false"`.
+- Cloudflare-baseline backfill in per-day chunks (#55): every missing day from netmon's second day to yesterday is written in its own statement and transaction, so one timed-out day no longer blocks the rest (three failures in a row defer the remaining days to the next run); a failed run resumes with the days still missing, filled days are skipped, and the nightly replaces of rolled days no longer wait for a completed backfill. The replace of rolled days skips a day whose backfill just failed in the same run and stops after three failures in a row (remaining days skipped, not retried).
+- `/coverage` also starts its comparison window at `definitionFrom` (#55), so a go-live date before the first definition-2 day never counts submissions of days without `daily_submits`.
 - `DEPLOYMENT.md`: restart the pod with `kubectl -n apps delete pod -l app=data-service` instead of `kubectl rollout restart`, because Flux strips the restart annotation on its next apply.
 - The freshness gauge is registered only for collectors that are enabled and able to succeed. A collector switched off, `reputation` without a key, or a Cloudflare collector without credentials therefore cannot trip `NetmonCollectorStale`.
 - Cloudflare request groups carry no ASN (`httpRequestsAdaptiveGroups` does not offer it; probe 2026-09-24). `inbound_request_groups` has no `asn`/`asn_org` columns, and ASN reaches `ip_enrichment` from firewall events only.

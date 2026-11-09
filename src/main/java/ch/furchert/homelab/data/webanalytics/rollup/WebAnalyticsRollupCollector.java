@@ -52,8 +52,11 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
     static final Duration MARGIN = Duration.ofHours(6);
     static final int UNIQUES_7D = 7;
     static final int UNIQUES_28D = 28;
-    /** A fault that hits every day (slow scan, overloaded database) stops the backfill after this many in a row. */
-    static final int MAX_CONSECUTIVE_BACKFILL_FAILURES = 3;
+    /**
+     * A fault that hits every day (slow scan, overloaded database) stops the CF baseline backfill, and separately the
+     * refresh of rolled days, after this many failed days in a row.
+     */
+    static final int MAX_CONSECUTIVE_CF_BASELINE_FAILURES = 3;
 
     private static final Logger log = LoggerFactory.getLogger(WebAnalyticsRollupCollector.class);
 
@@ -169,23 +172,16 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
     /**
      * The Cloudflare baseline (docs/100 §7.8, rev 3.5), after the analytics days and in separate transactions, so a
      * failure here never aborts the rollup: first the backfill of every missing day ({@link #backfillCfBaseline}),
-     * then a replace for every day rolled in this run. A held advisory lock stops both; any other failure is logged by
-     * class name and the remaining days still run. All problems are returned as one warning message (null = none).
+     * then a replace for every day rolled in this run ({@link #refreshCfBaseline}). A held advisory lock stops both;
+     * any other failure is logged by class name and the remaining days still run, up to
+     * {@link #MAX_CONSECUTIVE_CF_BASELINE_FAILURES} failures in a row. All problems are returned as one warning message
+     * (null = none).
      */
     String cfBaseline(List<LocalDate> rolled) {
         List<String> problems = new ArrayList<>();
-        if (backfillCfBaseline(problems)) {
-            for (LocalDate day : rolled) {
-                try {
-                    if (!Boolean.TRUE.equals(transactions.execute(status -> replaceCfBaselineDay(day)))) {
-                        problems.add("advisory lock held; CF baseline not refreshed");
-                        break;
-                    }
-                } catch (RuntimeException e) {
-                    log.warn("[{}] CF baseline day={} failed: {}", NAME, day, e.getClass().getSimpleName());
-                    problems.add("CF baseline " + day + " failed (" + e.getClass().getSimpleName() + ")");
-                }
-            }
+        Set<LocalDate> failedBackfillDays = new HashSet<>();
+        if (backfillCfBaseline(problems, failedBackfillDays)) {
+            refreshCfBaseline(rolled, failedBackfillDays, problems);
         }
         if (problems.isEmpty()) {
             return null;
@@ -199,13 +195,15 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
      * by netmon's retention and therefore partial) to yesterday that has no baseline row yet. On an empty table this
      * is the one-time pre-launch backfill; when a run fails part-way, the next run resumes with the days still
      * missing. Each day is its own statement and transaction ({@link #backfillCfBaselineDay}), so one slow day
-     * (statement timeout) cannot block the others; after {@link #MAX_CONSECUTIVE_BACKFILL_FAILURES} failed days in a
-     * row the run stops and leaves the remaining days to the next run. Exempt from {@link RollupPlanner#eligible}: it writes neither
-     * event-derived tables nor {@code rollup_day}. Nothing in netmon yet → nothing written, retried next run.
+     * (statement timeout) cannot block the others; after {@link #MAX_CONSECUTIVE_CF_BASELINE_FAILURES} failed days in
+     * a row the run stops and leaves the remaining days to the next run. Exempt from {@link RollupPlanner#eligible}: it
+     * writes neither event-derived tables nor {@code rollup_day}. Nothing in netmon yet → nothing written, retried
+     * next run.
      *
+     * @param failedDays receives the days whose backfill failed in this run
      * @return false when the advisory lock was held (the run stops there), true otherwise
      */
-    boolean backfillCfBaseline(List<String> problems) {
+    boolean backfillCfBaseline(List<String> problems, Set<LocalDate> failedDays) {
         List<LocalDate> missing;
         try {
             missing = transactions.execute(status -> missingCfBaselineDays());
@@ -214,7 +212,7 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
             problems.add("CF baseline backfill failed (" + e.getClass().getSimpleName() + ")");
             return true;
         }
-        int filled = 0;
+        int processed = 0; // days written, including days for which netmon yields no row
         int failed = 0;
         int consecutive = 0;
         boolean deferred = false;
@@ -222,31 +220,71 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         for (LocalDate day : missing == null ? List.<LocalDate>of() : missing) {
             try {
                 if (!Boolean.TRUE.equals(transactions.execute(status -> backfillCfBaselineDay(day)))) {
-                    problems.add("advisory lock held; CF baseline backfill stopped after " + filled + " day(s)");
+                    problems.add("advisory lock held; CF baseline backfill stopped after " + processed + " day(s)");
                     return false;
                 }
-                filled++;
+                processed++;
                 consecutive = 0;
             } catch (RuntimeException e) {
                 log.warn("[{}] CF baseline backfill day={} failed: {}", NAME, day, e.getClass().getSimpleName());
                 failed++;
+                failedDays.add(day);
                 if (failure == null) {
                     failure = e.getClass().getSimpleName();
                 }
-                if (++consecutive >= MAX_CONSECUTIVE_BACKFILL_FAILURES) {
+                if (++consecutive >= MAX_CONSECUTIVE_CF_BASELINE_FAILURES) {
                     deferred = true;
                     break;
                 }
             }
         }
-        if (filled > 0 || failed > 0) {
-            log.info("[{}] CF baseline backfill days={} failed={}", NAME, filled, failed);
+        if (processed > 0 || failed > 0) {
+            log.info("[{}] CF baseline backfill processed={} failed={}", NAME, processed, failed);
         }
         if (failed > 0) {
             problems.add("CF baseline backfill: " + failed + " day(s) failed (" + failure + ")"
                     + (deferred ? ", remaining days deferred" : ""));
         }
         return true;
+    }
+
+    /**
+     * Replaces the baseline of every rolled day ({@link #replaceCfBaselineDay}), except the days whose backfill just
+     * failed in this run (they are still missing, so the next run's backfill retries them). Stops at a held lock and
+     * after {@link #MAX_CONSECUTIVE_CF_BASELINE_FAILURES} failed days in a row; the remaining days are skipped, not
+     * retried (a final day keeps its earlier rows).
+     */
+    void refreshCfBaseline(List<LocalDate> rolled, Set<LocalDate> skip, List<String> problems) {
+        int failed = 0;
+        int consecutive = 0;
+        boolean skipped = false;
+        String failure = null;
+        for (LocalDate day : rolled) {
+            if (skip.contains(day)) {
+                continue;
+            }
+            try {
+                if (!Boolean.TRUE.equals(transactions.execute(status -> replaceCfBaselineDay(day)))) {
+                    problems.add("advisory lock held; CF baseline not refreshed");
+                    break;
+                }
+                consecutive = 0;
+            } catch (RuntimeException e) {
+                log.warn("[{}] CF baseline day={} failed: {}", NAME, day, e.getClass().getSimpleName());
+                failed++;
+                if (failure == null) {
+                    failure = e.getClass().getSimpleName();
+                }
+                if (++consecutive >= MAX_CONSECUTIVE_CF_BASELINE_FAILURES) {
+                    skipped = true;
+                    break;
+                }
+            }
+        }
+        if (failed > 0) {
+            problems.add("CF baseline refresh: " + failed + " day(s) failed (" + failure + ")"
+                    + (skipped ? ", remaining days skipped" : ""));
+        }
     }
 
     /** The backfill range ({@link #backfillCfBaseline}) minus the days that already have baseline rows, oldest first. */
