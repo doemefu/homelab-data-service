@@ -148,7 +148,7 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
     }
 
     @Test
-    void cfBaselineBackfillsOnceFromTheSecondNetmonDayWithNormalisedPaths() {
+    void cfBaselineBackfillsEveryMissingDayFromTheSecondNetmonDayWithNormalisedPaths() {
         inbound.page(zurich("2026-11-05T22:00:00"), "/de/automation", 9); // oldest netmon day: partial, skipped
         Instant h = zurich("2026-11-06T10:00:00");
         inbound.page(h, "/de", 3);
@@ -171,7 +171,7 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
                 "2026-11-06 / de 5 false", "2026-11-06 /automation en 4 false",
                 "2026-11-06 /projects/home-lab de 5 true", "2026-11-08 / en 1 false");
 
-        // No second backfill: a late netmon row for a day that is not rolled again changes nothing.
+        // A filled day is not backfilled again: a late netmon row for a day that is not rolled again changes nothing.
         inbound.page(zurich("2026-11-06T11:00:00"), "/de", 100);
         collector(clockAt(zurich("2026-11-09T07:35:00"))).collect();
         assertThat(baseline()).contains("2026-11-06 / de 5 false");
@@ -223,7 +223,7 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
     }
 
     @Test
-    void heldLockSkipsTheBackfillWithAWarningButNeverAbortsTheRollup() throws Exception {
+    void heldLockStopsTheBackfillWithAWarningButNeverAbortsTheRollup() throws Exception {
         new AggregateRows(jdbc).rollupDay(LocalDate.parse("2026-11-08"), true); // nothing left to roll
         inbound.page(zurich("2026-11-06T10:00:00"), "/de", 1);
         inbound.page(zurich("2026-11-07T10:00:00"), "/de", 1);
@@ -284,6 +284,68 @@ class WebAnalyticsPathsRollupIntegrationTest extends AbstractRollupIntegrationTe
                 .hasMessageContaining("remaining days deferred");
         verify(rollupRepository, times(3)).replaceCfBaseline(any(), any(), any(), any(), any());
         assertThat(baseline()).isEmpty();
+    }
+
+    @Test
+    void onlyConsecutiveBackfillFailuresStopTheBackfill() {
+        new AggregateRows(jdbc).rollupDay(LocalDate.parse("2026-11-08"), true); // nothing left to roll
+        inbound.page(zurich("2026-11-01T10:00:00"), "/de", 1); // oldest, partial
+        for (int d = 2; d <= 7; d++) {
+            inbound.page(zurich("2026-11-0" + d + "T10:00:00"), "/de", d);
+        }
+        // fail, fail, OK, fail, fail, OK, OK (2026-11-08 has no netmon row and writes nothing)
+        for (String failing : List.of("2026-11-02", "2026-11-03", "2026-11-05", "2026-11-06")) {
+            LocalDate day = LocalDate.parse(failing);
+            doThrow(new QueryTimeoutException("simulated"))
+                    .when(rollupRepository).replaceCfBaseline(eq(day), eq(day), any(), any(), any());
+        }
+
+        assertThatThrownBy(() -> collector(clockAt(zurich("2026-11-09T07:30:00"))).collect())
+                .isInstanceOf(CollectorWarning.class)
+                .hasMessageContaining("CF baseline backfill: 4 day(s) failed (QueryTimeoutException)")
+                .hasMessageNotContaining("deferred");
+        verify(rollupRepository, times(7)).replaceCfBaseline(any(), any(), any(), any(), any());
+        assertThat(baseline()).containsExactly("2026-11-04 / de 4 false", "2026-11-07 / de 7 false");
+    }
+
+    @Test
+    void theRefreshSkipsADayWhoseBackfillJustFailed() {
+        rows.landing(UUID.randomUUID(), zurich("2026-11-08T10:00:00"), "/", null, null); // 2026-11-08 is rolled
+        inbound.page(zurich("2026-11-06T10:00:00"), "/de", 1); // oldest, partial
+        inbound.page(zurich("2026-11-07T10:00:00"), "/de", 2);
+        inbound.page(zurich("2026-11-08T10:00:00"), "/de", 3);
+        LocalDate slow = LocalDate.parse("2026-11-08");
+        doThrow(new QueryTimeoutException("simulated"))
+                .when(rollupRepository).replaceCfBaseline(eq(slow), eq(slow), any(), any(), any());
+
+        assertThatThrownBy(() -> collector(clockAt(zurich("2026-11-09T07:30:00"))).collect())
+                .isInstanceOf(CollectorWarning.class)
+                .hasMessageContaining("CF baseline backfill: 1 day(s) failed (QueryTimeoutException)")
+                .hasMessageNotContaining("refresh");
+        verify(rollupRepository, times(1)).replaceCfBaseline(eq(slow), eq(slow), any(), any(), any());
+        assertThat(baseline()).containsExactly("2026-11-07 / de 2 false");
+    }
+
+    @Test
+    void theRefreshStopsAfterThreeConsecutiveFailures() {
+        AggregateRows aggregates = new AggregateRows(jdbc);
+        aggregates.rollupDay(LocalDate.parse("2026-11-02"), true);
+        aggregates.rollupDay(LocalDate.parse("2026-11-08"), true); // gap 2026-11-03..07 is rolled
+        inbound.page(zurich("2026-11-01T10:00:00"), "/de", 1); // oldest, partial
+        for (int d = 2; d <= 8; d++) {
+            LocalDate day = LocalDate.parse("2026-11-0" + d);
+            inbound.page(zurich("2026-11-0" + d + "T10:00:00"), "/de", d);
+            aggregates.cfBaseline(day, "/", "de", d, false); // nothing for the backfill to do
+        }
+        doThrow(new QueryTimeoutException("simulated"))
+                .when(rollupRepository).replaceCfBaseline(any(), any(), any(), any(), any());
+
+        assertThatThrownBy(() -> collector(clockAt(zurich("2026-11-09T07:30:00"))).collect())
+                .isInstanceOf(CollectorWarning.class)
+                .hasMessageContaining("CF baseline refresh: 3 day(s) failed (QueryTimeoutException), remaining days skipped");
+        verify(rollupRepository, times(3)).replaceCfBaseline(any(), any(), any(), any(), any());
+        assertThat(sum("SELECT count(*) FROM webanalytics.rollup_day WHERE day BETWEEN '2026-11-03' AND '2026-11-07'"))
+                .isEqualTo(5);
     }
 
     @Test
