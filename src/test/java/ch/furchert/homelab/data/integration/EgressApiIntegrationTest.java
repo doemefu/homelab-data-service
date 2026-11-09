@@ -2,10 +2,12 @@ package ch.furchert.homelab.data.integration;
 
 import ch.furchert.homelab.data.AbstractIntegrationTest;
 import ch.furchert.homelab.data.support.NetmonTables;
+import ch.furchert.homelab.data.support.PinnedEgressClock;
 import ch.furchert.homelab.data.support.TestJwks;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
@@ -25,8 +27,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * GET /egress/top (docs/060 §7.1, §7.2), checked against the shape furchert-ch consumes
  * ({@code EgressFlow} in furchert-ch {@code src/lib/netmon/client.ts}): 14 fields, nullable
- * namespace/workload/container/node/fqdn/firstSeenInWindow, string destinationIp, boolean isNew.
+ * namespace/workload/container/node/fqdn/firstSeenInWindow, string destinationIp, boolean isNew. The clock is pinned at
+ * 2026-09-24T12:00Z: every window here starts inside the raw retention, so these answers come from the hourly rows only
+ * and are unchanged by data-service#57.
  */
+@Import(PinnedEgressClock.class)
 class EgressApiIntegrationTest extends AbstractIntegrationTest {
 
     private static final String URI = "/api/netmon/egress/top";

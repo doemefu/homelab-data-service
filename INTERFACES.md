@@ -153,7 +153,13 @@ sshd authentication results per node and source. Default window 24 h; ordered by
 
 ### `GET /api/netmon/egress/top?from&to&scope&namespace&workload&limit` (§7.2, NM-2)
 
-Top outbound TCP destinations per workload, aggregated from the hourly `egress_flow_snapshots` rows that overlap the window. Default window 24 h. `scope` is `external` (default) or `all` (adds `pod`, `service`, `lan` and `loopback` destinations); anything else is 400 `invalid_parameter`. `namespace` and `workload` narrow by exact match. `limit` is a top-N limit (default 10, max 50).
+Top outbound TCP destinations per workload, aggregated from the hourly `egress_flow_snapshots` rows that overlap the window. Since data-service#57 the hourly rows are kept 8 days (staging: 30) and older days come from the daily aggregate `egress_flow_daily`:
+
+- A window that starts at or after `now − 8 d` (the raw retention; one hour of grace for windows derived from a slightly earlier clock, such as furchert-ch's `now − 30 d`) reads the hourly rows only, exactly as before. The dashboard's 24 h and 7 d ranges are such windows, and during the staging override (30 d) every window that ends at about now, i.e. every dashboard range.
+- An older window reads `egress_flow_daily` for every whole UTC day inside it up to the raw cut-off (`start of the current UTC day − 7 d`), and the hourly rows from the cut-off on. A partial first day, and a partial last day before the cut-off, are left out: windows older than the cut-off start at the next whole UTC day.
+- Every field keeps its meaning: `node` = the node with the most hourly rows (ties by name), `fqdn` = the newest non-null, `firstSeenInWindow` = the earliest hourly window (never more than the overlapping hour before `from`), `isNew` = any of them new.
+
+Default window 24 h. `scope` is `external` (default) or `all` (adds `pod`, `service`, `lan` and `loopback` destinations); anything else is 400 `invalid_parameter`. `namespace` and `workload` narrow by exact match. `limit` is a top-N limit (default 10, max 50).
 
 ```json
 { "items": [ {"namespace": "apps", "workload": "litellm", "container": "litellm", "node": "mba1",
@@ -166,8 +172,8 @@ Top outbound TCP destinations per workload, aggregated from the hourly `egress_f
 - Host processes (systemd units such as k3s) have `namespace` and `workload` `null`, and `container` is the unit name (`k3s.service`).
 - `destinationIp` is the post-NAT IP literal (RFC 5952). **Name-only destinations:** coroot reports an external destination whose name resolves to several external IPs (typical for SaaS APIs and CDNs) by name only, without an IP. For such an item `destinationIp` carries that name and `fqdn` the same name. Consumers must not assume `destinationIp` is an IP literal.
 - `fqdn` is otherwise the name coroot saw in DNS answers for the IP (`ip_to_fqdn`, newest row that has one), or `null`.
-- `node` is the most frequent node of the aggregated rows. `firstSeenInWindow` is the start of the earliest hour inside the window with this item.
-- `isNew` is `true` if any aggregated hour was the first in 30 days in which this workload reached this destination and port. The identity is namespace + workload + container, so rollouts do not re-report known destinations. The first hours after the collector starts report everything as new.
+- `node` is the most frequent node of the aggregated hourly rows. `firstSeenInWindow` is the start of the earliest aggregated hour, so it can be up to one hour before `from` (an hour overlapping the window).
+- `isNew` is `true` if any aggregated hour was the first in 30 days in which this workload reached this destination and port (since data-service#57: not seen earlier the same UTC day in the hourly rows, nor in the `egress_flow_daily` rows of the previous 30 UTC days). The identity is namespace + workload + container, so rollouts do not re-report known destinations. The first hours after the collector starts report everything as new.
 - Counters are `increase()` over each hour: an hour in which a destination's counter series first appears is a lower bound, and a destination seen only by the presence query has zero counters in that hour. `failedConnects` of a Service with several backends forms its own item with the Service IP (`scope` `service`, only with `scope=all`).
 
 ### `GET /api/netmon/logins/summary?from&to&limit` (§7.2, NM-4)
@@ -393,7 +399,8 @@ The four destinations on the internet (Cloudflare, Spamhaus, GitHub, AbuseIPDB) 
 | `netmon.lan_connection_snapshots` | data-service | V3. Peak TCP connections per 15-minute window, node, port, source and state; replaced per `(window_start, node)`. Retention 30 d. |
 | `netmon.ufw_block_snapshots` | data-service | V3. UFW blocks per 15-minute bucket, node, source, port and protocol (a lower bound); replaced per `(window_start, node)`. Retention 90 d. |
 | `netmon.ssh_auth_snapshots` | data-service | V3. sshd outcomes per 15-minute bucket, node and source; replaced per `(window_start, node)`. Retention 90 d. |
-| `netmon.egress_flow_snapshots` | data-service | V4. Outbound TCP flows per hour, node, `container_id`, destination and post-NAT destination: bytes, connects, failed connects, FQDN, scope, `is_new`; replaced per `window_start`, at most 2 000 rows per hour. `destination_ip` is null for name-only destinations; `destination_host` (generated) is the IP or the name. Retention 30 d. |
+| `netmon.egress_flow_snapshots` | data-service | V4. Outbound TCP flows per hour, node, `container_id`, destination and post-NAT destination: bytes, connects, failed connects, FQDN, scope, `is_new`; replaced per `window_start`, at most 2 000 rows per hour. `destination_ip` is null for name-only destinations; `destination_host` (generated) is the IP or the name. Retention 8 d (staging override 30 d), and only for UTC days that already have `egress_flow_daily` rows (data-service#57); the `(destination_ip)` index stays. |
+| `netmon.egress_flow_daily` | data-service | V9 (data-service#57). Daily aggregate of `egress_flow_snapshots` per UTC day and `(workload_key, destination_host, destination_port, destination_scope, node)`: sums, `first_window`, newest `fqdn`/`fqdn_window`, `is_new` (any), `hourly_rows`, `computed_at`. DDL only in V9; data-service recomputes a day with every window replace and repairs missing or stale days at the start of each `egress` run (no window is collected while a day of the 30-day `is_new` look-back lacks daily rows). Retention 32 d. |
 | `netmon.login_events` | data-service | V5. Form-login attempts pulled from the auth-service outbox: outcome, client IP and its source, username HMAC, subject (success only), user agent; upsert do-nothing on `event_id`. Retention 180 d. |
 | Schema `webanalytics` | data-service | V6 (docs/100 §7.1); `spring.flyway.schemas: public,netmon,webanalytics` |
 | `webanalytics.events` | data-service | V6. Accepted pageview, engagement, click and goal events with the pseudonymous `visitor_id` (never leaves data-service); `INSERT … ON CONFLICT DO NOTHING` on `event_id` and `(pageview_id, seq)`; shape, vocabulary, range and time CHECKs. WA-5: deleted 396 days after `occurred_at` (`webanalytics.retention.events-days`, at least 370) by the 03:30 UTC retention job (log `[retention] webanalytics.events deleted=<n>`); erasure by visitor id via `DELETE /visitors/{visitorId}`. |
@@ -442,7 +449,8 @@ No other service reads or writes this database.
 | `netmon.retention.lan-connection-snapshots-days` | `30` | Retention |
 | `netmon.retention.ufw-block-snapshots-days` / `ssh-auth-snapshots-days` | `90` / `90` | Retention |
 | `netmon.lan.max-windows-per-run` | `32` | Catch-up throttle for `lan` (the 48 h cap is 192 windows) |
-| `netmon.retention.egress-flow-snapshots-days` | `30` | Retention |
+| `netmon.retention.egress-flow-snapshots-days` | `8` | Retention of the hourly egress rows (≥ 2; only days with daily rows are deleted). Staging: `NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS=30` in `k8s/deployment.yaml` until the daily parity is checked (data-service#57) |
+| `netmon.retention.egress-flow-daily-days` | `32` | Retention of `egress_flow_daily` (≥ `egress-flow-snapshots-days` + 2) |
 | `netmon.egress.max-windows-per-run` | `12` | Catch-up throttle for `egress` (the 48 h cap is 48 windows) |
 | `netmon.retention.login-events-days` | `180` | Retention |
 | `netmon.auth-service.page-size` / `max-pages` | `500` / `10` | Outbox `limit` (1..1000) and pages per run |

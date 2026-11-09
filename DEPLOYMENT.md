@@ -328,6 +328,85 @@ UPDATE webanalytics.rollup_day SET final = false WHERE day BETWEEN DATE '2026-11
 | WARN `ingest activity seed failed: <class>` at startup | Database not reachable at startup; caps count from 0 and one re-seed runs 5 minutes later |
 | `webanalytics_raw_table_bytes` missing | No successful measurement yet (database unreachable since startup); WARN `raw table size not measured: <class>` |
 
+## #57 rollout: egress volume (daily aggregate, 8-day raw retention)
+
+data-service#57 (owner decision 2026-11-09): the hourly `netmon.egress_flow_snapshots` rows (≈ 1.36 GB, 94 % of `data_service`, ≈ 46 000 rows/day) shrink to 8 days, and the new daily aggregate `netmon.egress_flow_daily` (≈ 727 rows/day, ≈ 9 MB for 32 days) serves the older part of `/egress/top` windows (contract: docs/060 §3.3, §3.5, §7.2 as amended 2026-11-09; INTERFACES `/egress/top`).
+- V9 is DDL only. data-service fills the daily rows itself: with every window replace, and through a per-day repair at the start of each `egress` run.
+- The PVC threshold for the web analytics owner check (doemefu/homelab#351) is recorded here: the shared PostgreSQL volume `data-postgresql-0` grows to **10 GiB** (doemefu/homelab#359), and `WebAnalyticsTableLarge` fires at **3 GiB** (owner decision 2026-11-09).
+
+**Preconditions:**
+- doemefu/homelab#359 is done and the 10 GiB volume is verified.
+- The docs/060 spec PR is merged.
+- Merging is the rollout (Flux image automation). Do not merge, roll out or delete the pod within 30 min of 00:00 UTC (day boundary of the daily rows).
+
+**Stage 1 (this PR):** it ships `NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS: "30"` in `k8s/deployment.yaml`. Nothing is deleted, `/egress/top` reads the hourly rows only (every allowed window starts after `now − 30 d`, with one hour of grace for a request whose window was computed a moment earlier), and the daily table fills.
+1. After the first `egress` run (:07): the log has `[egress] daily repair recomputed=… failed=0`. The first run fills ≈ 30 days, one statement per day (estimated 1–3 s each; worst case ≈ 30 min if every day hits the 60 s statement timeout). A run that takes longer than an hour makes the next :07 run skip (per-collector lock); the 48 h catch-up then collects the windows.
+2. `select count(*), min(day), max(day) from netmon.egress_flow_daily;` → about 700–800 rows per day, back to the oldest hourly day.
+3. Parity, read-only, for a few days. Every row must show `equal = t` and the second query `differing = 0`. Replace `30` with the current raw retention.
+
+```sql
+-- runbook:egress-parity
+-- Completed UTC days entirely inside the raw retention: daily sums equal the hourly ones.
+WITH r AS (SELECT (window_start AT TIME ZONE 'UTC')::date AS day, count(*) AS rows, sum(bytes_sent) AS bs,
+                  sum(bytes_received) AS br, sum(connects) AS c, sum(failed_connects) AS f
+             FROM netmon.egress_flow_snapshots
+            GROUP BY 1),
+     d AS (SELECT day, sum(hourly_rows) AS rows, sum(bytes_sent) AS bs, sum(bytes_received) AS br,
+                  sum(connects) AS c, sum(failed_connects) AS f
+             FROM netmon.egress_flow_daily
+            GROUP BY 1)
+SELECT coalesce(r.day, d.day) AS day, r.rows AS raw_rows, d.rows AS daily_rows,
+       (r.rows, r.bs, r.br, r.c, r.f) IS NOT DISTINCT FROM (d.rows, d.bs, d.br, d.c, d.f) AS equal
+  FROM r FULL JOIN d ON d.day = r.day
+ WHERE coalesce(r.day, d.day) > ((now() - interval '30 days') AT TIME ZONE 'UTC')::date
+   AND coalesce(r.day, d.day) < (now() AT TIME ZONE 'UTC')::date
+ ORDER BY 1;
+```
+
+```sql
+-- runbook:egress-isnew-parity
+-- Rows of the last 3 days whose 30-day look-back lies fully inside the hourly rows: is_new equals the old rule.
+SELECT count(*) AS differing
+  FROM netmon.egress_flow_snapshots s
+ WHERE s.ingested_at > now() - interval '3 days'
+   AND s.window_start >= (SELECT min(window_start) FROM netmon.egress_flow_snapshots) + interval '30 days'
+   AND s.is_new <> NOT EXISTS (SELECT 1 FROM netmon.egress_flow_snapshots p
+                                WHERE p.workload_key = s.workload_key AND p.destination_host = s.destination_host
+                                  AND p.destination_port = s.destination_port
+                                  AND p.window_start < s.window_start
+                                  AND p.window_start >= s.window_start - interval '30 days');
+```
+
+The new rule looks back 30 whole UTC days plus the current day, so a difference can only come from an identity last seen 30–31 days earlier. Review any nonzero count before stage 2.
+
+**Stage 2 (one-line follow-up PR):** remove the `NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS` entry, so the default of 8 days applies.
+- The next 03:30 UTC retention run deletes ≈ 21–22 days (≈ 1.0 M rows) in batches of 5 000, each its own transaction. Hourly rows of a day without daily rows are never deleted (guard). The raw target runs before the daily target (32 d).
+- Cost: a DELETE writes the heap pages and WAL; it does not touch the indexes. The autovacuum that follows scans the heap and all six indexes to remove the dead entries, which is the I/O burst. Let both land before the web analytics go-live.
+- Wait for that vacuum: `select last_autovacuum, n_dead_tup from pg_stat_user_tables where relname = 'egress_flow_snapshots';` and `select * from pg_stat_progress_vacuum;`.
+- Afterwards `/egress/top` serves 30-day windows from daily rows plus 8–9 days of hourly rows. Check the dashboard's 24 h, 7 d and 30 d egress sections.
+
+**Optional: give the space back to the filesystem.**
+- PostgreSQL keeps the ≈ 1.36 GB file and reuses the freed pages for new egress rows. With the 10 GiB volume the filesystem stays well below 50 %, so this step is only for the owner who wants the ≈ 1 GB back.
+- Preconditions: stage 2 is done, the first retention pass and its autovacuum have finished, and at least 1 GB is free on the volume.
+- Run it between :15 and :55 UTC, as a single statement:
+
+```bash
+kubectl -n apps exec postgresql-0 -c postgresql -- env PGOPTIONS='-c lock_timeout=5s' \
+  psql -U postgres -d data_service -c 'VACUUM (FULL, ANALYZE) netmon.egress_flow_snapshots'
+```
+
+- It rewrites the ≈ 0.4 GB of live rows and indexes under an ACCESS EXCLUSIVE lock, estimated at 1–5 minutes. An `egress` run that starts meanwhile waits on the lock and then finishes; the dashboard egress section may show its fallback for that time.
+- Compare `select pg_size_pretty(pg_total_relation_size('netmon.egress_flow_snapshots'));` before and after.
+- Then do the Longhorn trim/snapshot checkbox on doemefu/homelab#359; the block-level size only shrinks after a filesystem trim.
+
+### Troubleshooting (#57)
+
+| Symptom | Likely cause |
+|---|---|
+| `/status` `egress` failed run, `lastErrorCode=partial` "daily rows missing in the is_new look-back", `consecutiveFailures` rising | The repair could not fill a day of the previous 30 days yet (more than 32 days to fill, or a recompute failed: WARN `daily recompute day=… failed: <class>`). The run counts as failed (no backoff), so `NetmonCollectorStale` (3 h class) fires if it persists; the windows are collected by the next successful run (48 h catch-up). Look at the WARN lines and the recompute statement timeout |
+| `partial` "… day(s) of egress_flow_daily could not be recomputed" | A recompute failed (statement timeout 60 s, database); retried on the next run |
+| The egress 30 d section shows less than before after stage 2 | The older part of 30-day windows counts whole UTC days only (the partial first day is left out, docs/060 §7.2) |
+
 ## WA-6 rollout (#61): coverage go-live date
 
 WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` in `k8s/deployment.yaml`. From that Europe/Zurich day on, `/api/webanalytics/coverage` compares consented tracking with the Cloudflare baseline (contract: `docs/100-web-analytics.md` §8.2, §11, §17 WA-6).
@@ -409,6 +488,7 @@ A token without `netmon:read` must get 403.
 - Code: revert the image tag commit in `k8s/deployment.yaml`, or suspend the Flux Kustomization `data-service`.
 - Schema: migrations are forward-only. An older image ignores newer migrations only if they are additive, so never edit or delete a merged migration.
 - WA-1 (V6, docs/100 §12.4): the previous image starts on a V6 database because Flyway ignores applied future migrations (`spring.flyway.ignore-migration-patterns` default `*:future`, not overridden here). Verified in WA-1 phase 1 and pinned by `WebAnalyticsUpgradeIntegrationTest`. Never edit or undo V6; the `webanalytics` schema simply stays. To stop ingest without a data-service change, set `ANALYTICS_COLLECT_ENABLED=false` in furchert-ch (pod delete).
+- #57 (V9): additive. The previous image ignores V9 (`*:future`) and the daily table. During stage 1 nothing is lost. After stage 2 the previous image's 30-day egress view shows only the 8–9 retained days. On roll-forward the repair rebuilds missing and stale daily days.
 - WA-5 (#56): no migration; revert the merge commit or pin the previous image. The previous image ignores the WA-5 settings and the `capped` stats rows, answers 200 again for every batch (no caps, no tombstones) and has no `DELETE /visitors/{id}` (the path is denied with 403, so furchert-ch keeps the forget pending). Rows deleted by retention or erasure cannot be restored (except from a dump), but retention deletes nothing before 396 days after the first event.
 - WA-3b (V8): additive; the previous image (definition 1) starts on a V8 database (`*:future`) and treats definition-2 days as current, so it does not rewrite them; the V8 tables stay. No new dependency.
 - WA-3a (V7): additive; the previous image starts on a V7 database (`*:future`). To stop the rollup without a code change, set `NETMON_COLLECTORS_WEBANALYTICS_ROLLUP_ENABLED` to `"false"` (or remove it; the YAML default is `false`) and delete the pod. If the alternative `SPRING_APPLICATION_JSON` was used to enable it, change it there too: it outranks the env var. Aggregates stay as they are. A re-enabled run only writes days that are missing, provisional days once they have closed, and days on an outdated definition within the last 30 days (final ones included); at most 31 days per category per run, so a long backlog takes several runs. Other final days are not rewritten. WA-3a adds no dependency.

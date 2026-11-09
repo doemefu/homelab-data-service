@@ -18,6 +18,7 @@ public final class NetmonTables {
         jdbc.sql("DELETE FROM netmon.ufw_block_snapshots").update();
         jdbc.sql("DELETE FROM netmon.ssh_auth_snapshots").update();
         jdbc.sql("DELETE FROM netmon.egress_flow_snapshots").update();
+        jdbc.sql("DELETE FROM netmon.egress_flow_daily").update();
         jdbc.sql("DELETE FROM netmon.login_events").update();
         jdbc.sql("DELETE FROM netmon.collector_state").update();
     }

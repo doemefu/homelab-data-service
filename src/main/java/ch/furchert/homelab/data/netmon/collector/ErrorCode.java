@@ -6,7 +6,11 @@ public enum ErrorCode {
     RATE_LIMITED("rate_limited"),
     UPSTREAM("upstream"),
     TRUNCATED("truncated"),
-    /** A run that stored what it could but skipped upstream rows violating the table contract (a warning). */
+    /**
+     * Part of the work was not done: as a warning, a run that stored what it could but skipped upstream rows violating
+     * the table contract (or, e.g. for the web analytics rollup, days it could not write); as a failure, the
+     * {@code egress} run that skips window collection while a day of its {@code is_new} look-back lacks daily rows.
+     */
     PARTIAL("partial"),
     INTERNAL("internal");
 
