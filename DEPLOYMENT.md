@@ -232,7 +232,7 @@ WA-3b adds the migration `V8__webanalytics_path_aggregates` (eight tables, addit
 1. **Merge this PR.** Flux rolls out the image; Flyway applies V8. `/api/webanalytics/status` then shows `definitionVersion: 2`; the four new endpoints answer with the empty state.
 2. **Rollup still disabled:** nothing else happens. On the first enabled run (after gate N1) the collector backfills `daily_cf_baseline` from every day netmon holds (about 90 days, one statement and transaction per day) and recomputes the last 30 days with definition 2 (at most 31 days per run).
 3. **Rollup already enabled when WA-3b ships:** the same happens on the next trigger (01:12 or 07:30). Check afterwards: `select count(*), min(day), max(day) from webanalytics.daily_cf_baseline;` and `select definition_version, count(*) from webanalytics.rollup_day group by 1;`.
-4. `/coverage` compares nothing until WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` (homelab-data-service#61); a future date also compares nothing until that day.
+4. `/coverage` compares nothing until WA-6 sets the go-live date (see "WA-6 rollout (#61)"); a future date also compares nothing until that day.
 
 ### Troubleshooting (WA-3b)
 
@@ -406,6 +406,65 @@ kubectl -n apps exec postgresql-0 -c postgresql -- env PGOPTIONS='-c lock_timeou
 | `/status` `egress` failed run, `lastErrorCode=partial` "daily rows missing in the is_new look-back", `consecutiveFailures` rising | The repair could not fill a day of the previous 30 days yet (more than 32 days to fill, or a recompute failed: WARN `daily recompute day=… failed: <class>`). The run counts as failed (no backoff), so `NetmonCollectorStale` (3 h class) fires if it persists; the windows are collected by the next successful run (48 h catch-up). Look at the WARN lines and the recompute statement timeout |
 | `partial` "… day(s) of egress_flow_daily could not be recomputed" | A recompute failed (statement timeout 60 s, database); retried on the next run |
 | The egress 30 d section shows less than before after stage 2 | The older part of 30-day windows counts whole UTC days only (the partial first day is left out, docs/060 §7.2) |
+
+## WA-6 rollout (#61): coverage go-live date
+
+WA-6 sets `webanalytics.coverage.go-live-date` with the env var `WEBANALYTICS_COVERAGE_GOLIVEDATE` in `k8s/deployment.yaml`. From that Europe/Zurich day on, `/api/webanalytics/coverage` compares consented tracking with the Cloudflare baseline (contract: `docs/100-web-analytics.md` §8.2, §11, §17 WA-6).
+- No code change: the explicit empty YAML entry, the binding and the "null while unset or in the future" rule exist since WA-3b.
+- The entry stays in the manifest after go-live. Rollback = remove the line.
+- `GoLiveDateBindingTest.theManifestValueBindsToADate` checks the manifest value before Flux rolls it out: a quoted ISO date on the `data-service` container, no `valueFrom`, no other `WEBANALYTICS_COVERAGE*` entry, and it binds to a date. Without the entry the test is skipped (= no go-live date set). In the go-live PR, check in the surefire report (`target/surefire-reports/TEST-…GoLiveDateBindingTest.xml`, `skipped="0"`) that it ran.
+
+**Choosing the day D.**
+- D is the Europe/Zurich calendar day on which the flipped furchert-ch image (furchert-ch#158) is rolled out.
+- Take the new furchert-ch pod's start time (`kubectl -n apps get pods -l app=furchert-ch -o jsonpath='{.items[*].status.startTime}'`, UTC) and convert it to Europe/Zurich.
+- If that disagrees with the first `[analytics] forward summary` line with accepted > 0 in the furchert-ch log, the summary line wins.
+- It is not the merge day of #158 if the build runs past midnight.
+- D is partial by design: tracking starts at the flip, while Cloudflare counts the whole day, so D's coverage reads low. Flip in the morning so D has most of a day of tracking.
+
+**Order:**
+1. furchert-ch#158 is merged, its image is built and rolled out (the flip).
+2. The furchert-ch post-flip checks V0–V13 pass.
+3. Merge the manifest PR in this repo. It adds one entry to the `data-service` container's `env` list (D as a quoted ISO date, e.g. `"2026-11-20"`):
+
+   ```yaml
+               - name: WEBANALYTICS_COVERAGE_GOLIVEDATE
+                 value: "2026-11-20"
+   ```
+
+   Merging on D + 1 is still valid: the date names the day, not the merge time.
+4. Post-merge check (below), then the remaining E2E items that need it.
+5. homelab#352 (`WebAnalyticsIngestSilent`) after the checklist has passed.
+
+**Merge time.**
+- Merging restarts the pod: Flux applies the env change.
+- Do not merge or roll back in these UTC windows: **23:00–00:45** (egress day boundary at 00:00 UTC; rollup 01:12 Zurich = 00:12 UTC in winter, 23:12 UTC in summer), **03:15–03:45** (retention 03:30 UTC), **05:15–06:45** (rollup 07:30 Zurich = 06:30 UTC in winter, 05:30 UTC in summer).
+- The other collectors run every few minutes and simply catch up after the restart.
+- Like every restart, the WA-5 caps ledger re-seeds from `events.received_at` and the erasure tombstones are reset.
+
+**Post-merge check (read-only, port-forward, `analytics:read` token read into `$TOKEN` without echoing it):**
+
+```bash
+kubectl -n apps port-forward svc/data-service 8082:8082 &
+# --fail turns a 401/403/5xx into an error instead of an empty-looking answer; jq -e rejects any other shape.
+curl -sS --fail -H "Authorization: Bearer $TOKEN" localhost:8082/api/webanalytics/coverage \
+  | jq -e 'if has("baselineFrom") and (.daily | type == "array")
+           then {baselineFrom, days: (.daily | length), firstDay: .daily[0].day}
+           else error("not a /coverage response") end'
+curl -sS --fail -H "Authorization: Bearer $TOKEN" localhost:8082/api/webanalytics/status | jq -e '.lastCompleteDay'
+```
+
+| When | Expected |
+|---|---|
+| Before D (a future date) | `baselineFrom: null`, `daily` empty |
+| On D, before D + 1 07:30 Zurich | `baselineFrom: "D"`, `daily` still empty: D is not final yet, and only final days are served (WA-3a rule) |
+| Once `/status` `lastCompleteDay` ≥ D (the 07:30 Zurich run on D + 1 starts the rollup; check its success, not the clock) | `firstDay == "D"`, and `daily[0].consentedPageviews > 0`; `byPage` and `enquiries` from D. `/status` otherwise unchanged |
+
+The pre-launch Cloudflare rows (backfilled since WA-3b) stay stored and are never compared.
+
+**Rollback.**
+- Remove the `WEBANALYTICS_COVERAGE_GOLIVEDATE` entry (revert PR), within the same merge-time rules. The pod restarts, with the same ledger re-seed and tombstone reset.
+- `baselineFrom` becomes `null` and `/coverage` is empty again. No data changes: aggregates, CF baseline and ingest stats stay.
+- A wrong date is fixed by a one-line PR with the right one; nothing is stored per go-live date.
 
 ## Verification (§11 NM-0)
 
