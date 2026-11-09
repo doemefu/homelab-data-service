@@ -87,7 +87,7 @@ public class EgressDailyRepair {
                         e.getClass().getSimpleName());
             }
         }
-        if (failed == 0) {
+        if (failed == 0 && due.size() <= maxDays) {
             fullCheckDone = true;
         }
         if (recomputed > 0 || failed > 0) {

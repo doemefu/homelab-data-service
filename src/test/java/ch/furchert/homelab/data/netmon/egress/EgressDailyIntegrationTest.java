@@ -3,9 +3,9 @@ package ch.furchert.homelab.data.netmon.egress;
 import ch.furchert.homelab.data.AbstractIntegrationTest;
 import ch.furchert.homelab.data.config.EgressProperties;
 import ch.furchert.homelab.data.config.RetentionProperties;
+import ch.furchert.homelab.data.netmon.collector.CollectorException;
 import ch.furchert.homelab.data.netmon.collector.CollectorRunner;
 import ch.furchert.homelab.data.netmon.collector.CollectorStateRepository;
-import ch.furchert.homelab.data.netmon.collector.CollectorWarning;
 import ch.furchert.homelab.data.netmon.collector.ErrorCode;
 import ch.furchert.homelab.data.netmon.enrichment.IpEnrichmentService;
 import ch.furchert.homelab.data.netmon.lan.FakePrometheus;
@@ -141,10 +141,11 @@ class EgressDailyIntegrationTest extends AbstractIntegrationTest {
         insert("2026-09-22T10:00:00Z", 20);
         state.updateWindowEnd(EgressCollector.NAME, Instant.parse("2026-09-24T09:00:00Z"));
 
-        // Only one recompute per run: 2026-09-22 (newest) is filled, 2026-09-20 is still missing.
+        // Only one recompute per run: 2026-09-22 (newest) is filled, 2026-09-20 is still missing. The run fails with
+        // code partial (not a warning), so the freshness gauge stops; partial is no backoff code.
         assertThatThrownBy(() -> collector(oneFlow(500), 1).collect())
-                .isInstanceOf(CollectorWarning.class)
-                .satisfies(e -> assertThat(((CollectorWarning) e).code()).isEqualTo(ErrorCode.PARTIAL));
+                .isInstanceOf(CollectorException.class)
+                .satisfies(e -> assertThat(((CollectorException) e).code()).isEqualTo(ErrorCode.PARTIAL));
         assertThat(daily()).containsExactly("2026-09-22|mba1|apps/litellm/litellm|34.117.59.81|20|1|true");
         assertThat(jdbc.sql("SELECT count(*) FROM netmon.egress_flow_snapshots WHERE window_start = '2026-09-24T09:00:00Z'")
                 .query(Long.class).single()).isZero();
@@ -155,6 +156,22 @@ class EgressDailyIntegrationTest extends AbstractIntegrationTest {
         collector(oneFlow(500), 1).collect();
         assertThat(daily()).extracting(r -> r.substring(0, 10))
                 .containsExactly("2026-09-20", "2026-09-22", "2026-09-24");
+    }
+
+    @Test
+    void theSkippedRunCountsAsAFailureWithoutBackoff() {
+        insert("2026-09-20T10:00:00Z", 10);
+        insert("2026-09-22T10:00:00Z", 20);
+        state.updateWindowEnd(EgressCollector.NAME, Instant.parse("2026-09-24T09:00:00Z"));
+        EgressCollector collector = collector(oneFlow(500), 1);
+
+        assertThat(runner.run(collector)).isFalse();
+        assertThat(state.find(EgressCollector.NAME).orElseThrow().consecutiveFailures()).isEqualTo(1);
+        assertThat(state.find(EgressCollector.NAME).orElseThrow().lastErrorCode()).isEqualTo("partial");
+
+        // Not in backoff: the very next run repairs the last day and collects the window.
+        assertThat(runner.run(collector)).isTrue();
+        assertThat(state.find(EgressCollector.NAME).orElseThrow().consecutiveFailures()).isZero();
     }
 
     @Test
@@ -178,6 +195,22 @@ class EgressDailyIntegrationTest extends AbstractIntegrationTest {
         repair.repair();
         assertThat(daily()).containsExactly("2026-09-15|mba1|apps/litellm/litellm|34.117.59.81|99|1|true",
                 "2026-09-23|mba1|apps/litellm/litellm|34.117.59.81|7|1|true");
+    }
+
+    @Test
+    void theFullStaleCheckRepeatsUntilAllDueDaysFitIntoOneRun() {
+        insert("2026-09-10T10:00:00Z", 10);
+        insert("2026-09-12T10:00:00Z", 10);
+        repository.recomputeDay(LocalDate.parse("2026-09-10"));
+        repository.recomputeDay(LocalDate.parse("2026-09-12"));
+        jdbc.sql("UPDATE netmon.egress_flow_daily SET computed_at = now() - interval '1 hour'").update();
+        jdbc.sql("UPDATE netmon.egress_flow_snapshots SET bytes_sent = 55").update();
+        EgressDailyRepair repair = new EgressDailyRepair(repository, retention(), Clock.fixed(NOW, ZoneOffset.UTC), 1);
+
+        repair.repair(); // newest stale day only (limit 1); the full check is not done yet
+        assertThat(daily()).extracting(r -> r.split("\\|")[4]).containsExactly("10", "55");
+        repair.repair(); // still a full-range check: the older stale day follows
+        assertThat(daily()).extracting(r -> r.split("\\|")[4]).containsExactly("55", "55");
     }
 
     private void insert(String windowStart, long bytes) {

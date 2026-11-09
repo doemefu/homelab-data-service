@@ -113,7 +113,15 @@ class RunbookSqlIntegrationTest extends AbstractIntegrationTest {
         LocalDate today = LocalDate.now(java.time.ZoneOffset.UTC);
         assertThat(rows).containsExactly(today.minusDays(3) + "|true", today.minusDays(2) + "|false");
 
+        // is_new parity: only rows whose 30-day look-back lies fully inside the hourly rows are compared. A wrong flag
+        // on the 3-days-old row (look-back reaches before the oldest hourly row) is ignored; one on a current row counts.
         assertThat(jdbc.sql(runbooks.get("egress-isnew-parity")).query(Long.class).single()).isZero();
+        jdbc.sql("UPDATE netmon.egress_flow_snapshots SET is_new = true "
+                + "WHERE window_start = date_trunc('hour', now() - interval '3 days')").update();
+        egressRow("now()");
+        jdbc.sql("UPDATE netmon.egress_flow_snapshots SET is_new = true WHERE window_start = date_trunc('hour', now())")
+                .update();
+        assertThat(jdbc.sql(runbooks.get("egress-isnew-parity")).query(Long.class).single()).isEqualTo(1L);
     }
 
     /** SQL fragment is a fixed test literal. */

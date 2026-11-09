@@ -142,6 +142,60 @@ class EgressTopDailyIntegrationTest extends AbstractIntegrationTest {
                 .doesNotContain("140.82.121.7");
     }
 
+    @Test
+    void windowsJustBeforeTheBoundaryWithinTheGraceReadTheHourlyRows() {
+        jdbc.sql("DELETE FROM netmon.egress_flow_daily").update(); // the hourly path must not need them
+        EgressQueryRepository staging = new EgressQueryRepository(jdbc, Clock.fixed(NOW, ZoneOffset.UTC), retention(30));
+        TimeWindow stage1 = new TimeWindow(NOW.minusSeconds(30L * 24 * 3600 + 1), NOW);
+        assertThat(staging.top(stage1, null, null, null, 50))
+                .isEqualTo(staging.topFromHourlyRows(stage1, null, null, null, 50));
+        TimeWindow stage2 = new TimeWindow(NOW.minusSeconds(8L * 24 * 3600 + 59 * 60), NOW);
+        assertThat(queries.top(stage2, null, null, null, 50))
+                .isEqualTo(queries.topFromHourlyRows(stage2, null, null, null, 50));
+    }
+
+    @Test
+    void theUnionPathAppliesScopeAndNamespaceAndWorkloadFiltersAndKeepsHostProcesses() {
+        // A pod-scope flow of litellm (daily part only) and a host process with NULL namespace/workload on a daily
+        // day and a raw day: one item across both parts (IS NOT DISTINCT FROM join).
+        jdbc.sql(INSERT.formatted("'2026-09-11T08:00:00Z'", "'mba1'", "'/k8s/apps/litellm-5d8f7c9b6-x2k9p/litellm'",
+                "'apps'", "'litellm-5d8f7c9b6-x2k9p'", "'litellm'", "'litellm'", "'apps/litellm/litellm'",
+                "'10.42.1.7'", "'pod'", 50)).update();
+        for (String ws : List.of("2026-09-11T09:00:00Z", "2026-09-20T09:00:00Z")) {
+            jdbc.sql(INSERT.formatted("'" + ws + "'", "'raspi5'", "'/system.slice/k3s.service'", "NULL", "NULL",
+                    "'k3s.service'", "NULL", "'/system.slice/k3s.service'", "'140.82.121.4'", "'external'", 3)).update();
+        }
+        repository.recomputeDay(LocalDate.parse("2026-09-11"));
+        repository.recomputeDay(LocalDate.parse("2026-09-20"));
+        TimeWindow window = new TimeWindow(Instant.parse("2026-09-10T00:00:00Z"), NOW);
+
+        List<EgressTopItem> all = queries.top(window, null, null, null, 50);
+        assertThat(all).extracting(EgressTopItem::destinationIp).contains("10.42.1.7");
+        assertThat(all).filteredOn(i -> "k3s.service".equals(i.container())).singleElement()
+                .satisfies(i -> {
+                    assertThat(i.namespace()).isNull();
+                    assertThat(i.workload()).isNull();
+                    assertThat(i.node()).isEqualTo("raspi5");
+                    assertThat(i.bytesSent()).isEqualTo(6);
+                });
+        assertThat(queries.top(window, "external", null, null, 50)).extracting(EgressTopItem::destinationIp)
+                .doesNotContain("10.42.1.7");
+        assertThat(queries.top(window, null, "apps", null, 50)).extracting(EgressTopItem::container)
+                .doesNotContain("k3s.service").contains("litellm");
+        assertThat(queries.top(window, null, null, "litellm", 50)).extracting(EgressTopItem::container)
+                .containsOnly("litellm");
+    }
+
+    /** SQL fragments are fixed test literals: window, node, container_id, ns, pod, container, workload, key, ip, scope, bytes. */
+    private static final String INSERT = """
+            INSERT INTO netmon.egress_flow_snapshots (window_start, window_end, node, container_id, namespace, pod,
+                container, workload, workload_key, destination, actual_destination, destination_ip, destination_port,
+                destination_scope, fqdn, bytes_sent, bytes_received, connects, failed_connects, is_new, source)
+            VALUES (CAST(%1$s AS timestamptz), CAST(%1$s AS timestamptz) + interval '1 hour', %2$s, %3$s, %4$s, %5$s,
+                    %6$s, %7$s, %8$s, %9$s || ':443', %9$s || ':443', CAST(%9$s AS inet), 443, %10$s, NULL, %11$d, 0, 1, 0,
+                    false, 'prometheus-coroot')
+            """;
+
     private void row(String windowStart, String node, String ip, String fqdn, long bytes, boolean isNew) {
         jdbc.sql("""
                         INSERT INTO netmon.egress_flow_snapshots (window_start, window_end, node, container_id, namespace, pod,

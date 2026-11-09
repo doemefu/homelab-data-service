@@ -1,6 +1,7 @@
 package ch.furchert.homelab.data.netmon.egress;
 
 import ch.furchert.homelab.data.config.EgressProperties;
+import ch.furchert.homelab.data.netmon.collector.CollectorException;
 import ch.furchert.homelab.data.netmon.collector.CollectorRunner;
 import ch.furchert.homelab.data.netmon.collector.CollectorState;
 import ch.furchert.homelab.data.netmon.collector.CollectorStateRepository;
@@ -51,7 +52,7 @@ import java.util.regex.Pattern;
  *
  * <p>Each window replace also recomputes the window's UTC day in {@code egress_flow_daily}; at the start of every run
  * {@link EgressDailyRepair} fills or repairs daily rows, and no window is collected while a day of the {@code is_new}
- * look-back still lacks them (warning {@code partial}; data-service#57).
+ * look-back still lacks them (a failed run with code {@code partial}; data-service#57).
  *
  * <p>No agent publishing at the latest evaluation point (the DaemonSet is gated off or not scraped) is a successful
  * run with an {@code upstream} warning, like {@code lan}; the mark advances over the empty windows. Logs carry
@@ -140,7 +141,9 @@ public class EgressCollector implements NetmonCollector {
         LocalDate nextDay = EgressSnapshotRepository.utcDay(mark);
         if (dailyRepair.anyDayMissing(nextDay.minusDays(EgressSnapshotRepository.LOOKBACK_DAYS),
                 EgressSnapshotRepository.utcDay(now))) {
-            throw new CollectorWarning(ErrorCode.PARTIAL, DAILY_MISSING);
+            // A failed run (not a warning), so the freshness gauge stops and NetmonCollectorStale can fire if this
+            // persists; PARTIAL is not a backoff code, so the next hourly run tries again.
+            throw new CollectorException(ErrorCode.PARTIAL, DAILY_MISSING);
         }
 
         int processed = 0;

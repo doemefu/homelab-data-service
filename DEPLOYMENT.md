@@ -340,7 +340,7 @@ data-service#57 (owner decision 2026-11-09): the hourly `netmon.egress_flow_snap
 - Merging is the rollout (Flux image automation). Do not merge, roll out or delete the pod within 30 min of 00:00 UTC (day boundary of the daily rows).
 
 **Stage 1 (this PR):** it ships `NETMON_RETENTION_EGRESSFLOWSNAPSHOTSDAYS: "30"` in `k8s/deployment.yaml`. Nothing is deleted, `/egress/top` reads the hourly rows only (every allowed window starts after `now − 30 d`, with one hour of grace for a request whose window was computed a moment earlier), and the daily table fills.
-1. After the first `egress` run (:07): the log has `[egress] daily repair recomputed=… failed=0`. The first run fills ≈ 30 days, one statement per day, and may take a few minutes.
+1. After the first `egress` run (:07): the log has `[egress] daily repair recomputed=… failed=0`. The first run fills ≈ 30 days, one statement per day (estimated 1–3 s each; worst case ≈ 30 min if every day hits the 60 s statement timeout). A run that takes longer than an hour makes the next :07 run skip (per-collector lock); the 48 h catch-up then collects the windows.
 2. `select count(*), min(day), max(day) from netmon.egress_flow_daily;` → about 700–800 rows per day, back to the oldest hourly day.
 3. Parity, read-only, for a few days. Every row must show `equal = t` and the second query `differing = 0`. Replace `30` with the current raw retention.
 
@@ -365,10 +365,11 @@ SELECT coalesce(r.day, d.day) AS day, r.rows AS raw_rows, d.rows AS daily_rows,
 
 ```sql
 -- runbook:egress-isnew-parity
--- Rows of the last 3 days: is_new equals the old 30-day hourly rule.
+-- Rows of the last 3 days whose 30-day look-back lies fully inside the hourly rows: is_new equals the old rule.
 SELECT count(*) AS differing
   FROM netmon.egress_flow_snapshots s
  WHERE s.ingested_at > now() - interval '3 days'
+   AND s.window_start >= (SELECT min(window_start) FROM netmon.egress_flow_snapshots) + interval '30 days'
    AND s.is_new <> NOT EXISTS (SELECT 1 FROM netmon.egress_flow_snapshots p
                                 WHERE p.workload_key = s.workload_key AND p.destination_host = s.destination_host
                                   AND p.destination_port = s.destination_port
@@ -402,7 +403,7 @@ kubectl -n apps exec postgresql-0 -c postgresql -- env PGOPTIONS='-c lock_timeou
 
 | Symptom | Likely cause |
 |---|---|
-| `/status` `egress` `lastErrorCode=partial` "daily rows missing in the is_new look-back" | The repair could not fill a day of the previous 30 days yet (more than 32 days to fill, or a recompute failed: WARN `daily recompute day=… failed: <class>`); the windows are collected by the next run (48 h catch-up) |
+| `/status` `egress` failed run, `lastErrorCode=partial` "daily rows missing in the is_new look-back", `consecutiveFailures` rising | The repair could not fill a day of the previous 30 days yet (more than 32 days to fill, or a recompute failed: WARN `daily recompute day=… failed: <class>`). The run counts as failed (no backoff), so `NetmonCollectorStale` (3 h class) fires if it persists; the windows are collected by the next successful run (48 h catch-up). Look at the WARN lines and the recompute statement timeout |
 | `partial` "… day(s) of egress_flow_daily could not be recomputed" | A recompute failed (statement timeout 60 s, database); retried on the next run |
 | The egress 30 d section shows less than before after stage 2 | The older part of 30-day windows counts whole UTC days only (the partial first day is left out, docs/060 §7.2) |
 
