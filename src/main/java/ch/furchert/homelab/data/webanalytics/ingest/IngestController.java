@@ -4,6 +4,7 @@ import ch.furchert.homelab.data.web.NetmonApiException;
 import ch.furchert.homelab.data.web.ProblemCode;
 import ch.furchert.homelab.data.webanalytics.ingest.IngestDtos.EventDto;
 import ch.furchert.homelab.data.webanalytics.ingest.IngestDtos.IngestRequest;
+import ch.furchert.homelab.data.webanalytics.ingest.IngestDtos.CappedResponse;
 import ch.furchert.homelab.data.webanalytics.ingest.IngestDtos.IngestResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -28,7 +29,8 @@ import java.net.URI;
  * {@code POST /api/webanalytics/events} (docs/100 §6.2, §6.3). Access control and the no-store headers come from
  * the {@code /api/webanalytics/**} security chain, which runs before the body is read. The body is read here
  * through a byte cap (Content-Length first, then a counted stream that also covers chunked bodies) and parsed by
- * {@link IngestJson}. Problem details are fixed texts; nothing from the body is echoed or logged.
+ * {@link IngestJson}. Problem details are fixed texts; nothing from the body is echoed or logged. A capped batch
+ * (WA-5) gets 429 with the §6.3 body, not a problem document.
  */
 @RestController
 public class IngestController {
@@ -37,26 +39,36 @@ public class IngestController {
 
     private final IngestJson json;
     private final IngestService service;
+    private final CappedBatchRecorder cappedRecorder;
 
-    public IngestController(IngestJson json, IngestService service) {
+    public IngestController(IngestJson json, IngestService service, CappedBatchRecorder cappedRecorder) {
         this.json = json;
         this.service = service;
+        this.cappedRecorder = cappedRecorder;
     }
 
     @PostMapping(path = "/api/webanalytics/events", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public IngestResponse ingest(HttpServletRequest request, JwtAuthenticationToken authentication) throws IOException {
+    public ResponseEntity<?> ingest(HttpServletRequest request, JwtAuthenticationToken authentication)
+            throws IOException {
         IngestRequest batch = parse(readBody(request));
         checkBatch(batch);
         IngestOutcome outcome;
         try {
             outcome = service.ingest(batch, authentication.getToken().getSubject());
+        } catch (IngestCappedException e) {
+            // The batch transaction rolled back: nothing stored or counted, edgeDrops included (docs/100 §6.3).
+            cappedRecorder.record(e.capped());
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).contentType(MediaType.APPLICATION_JSON)
+                    .body(new CappedResponse(0, 0, 0, true, e.capped().scope().label(),
+                            IngestCaps.format(e.capped().retryAt())));
         } catch (DataAccessException | TransactionException e) {
             // Class name only: database messages can quote the failing row (incl. the visitor id).
             log.warn("[webanalytics] batch write failed: {}", e.getClass().getSimpleName());
             throw new WebAnalyticsStorageException();
         }
-        return new IngestResponse(outcome.accepted(), outcome.duplicates(), outcome.rejectedTotal(), false);
+        return ResponseEntity.ok(new IngestResponse(outcome.accepted(), outcome.duplicates(), outcome.rejectedTotal(),
+                false));
     }
 
     /**

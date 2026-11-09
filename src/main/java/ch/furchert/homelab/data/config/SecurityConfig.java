@@ -35,6 +35,8 @@ public class SecurityConfig {
     static final String NETMON_READ = "SCOPE_netmon:read";
     static final String ANALYTICS_WRITE = "SCOPE_analytics:write";
     static final String WEBANALYTICS_EVENTS = "/api/webanalytics/events";
+    /** WA-5 erasure (docs/100 §6.5): {@code DELETE /api/webanalytics/visitors/{visitorId}}, write access. */
+    static final String WEBANALYTICS_VISITORS = "/api/webanalytics/visitors/*";
     static final String ANALYTICS_READ = "SCOPE_analytics:read";
     /** The read endpoints of WA-3a and WA-3b (docs/100 §8.2). */
     static final String[] WEBANALYTICS_READ_PATHS = {"/api/webanalytics/status", "/api/webanalytics/overview",
@@ -99,7 +101,8 @@ public class SecurityConfig {
     }
 
     /**
-     * Chain 3: the web analytics API. Writes (docs/100 §6.1): {@code SCOPE_analytics:write} AND a {@code sub} in
+     * Chain 3: the web analytics API. Writes (docs/100 §6.1; {@code POST /events} and the WA-5
+     * {@code DELETE /visitors/{visitorId}}): {@code SCOPE_analytics:write} AND a {@code sub} in
      * {@code webanalytics.api.write-clients} AND no {@code ROLE_*} authority. Reads (§8.1, rev 3.4):
      * {@code SCOPE_analytics:read} AND a {@code sub} in {@code webanalytics.api.read-clients} AND no {@code ROLE_*}
      * authority (defence in depth against role-bearing user tokens; client-credentials tokens carry no role).
@@ -127,6 +130,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, WEBANALYTICS_EVENTS).access(writeAccess)
                         .requestMatchers(WEBANALYTICS_EVENTS).access(writeAccess)
+                        .requestMatchers(HttpMethod.DELETE, WEBANALYTICS_VISITORS).access(writeAccess)
+                        .requestMatchers(WEBANALYTICS_VISITORS).access(writeAccess)
                         .requestMatchers(HttpMethod.GET, WEBANALYTICS_READ_PATHS).access(readAccess)
                         .requestMatchers(WEBANALYTICS_READ_PATHS).access(readAccess)
                         .anyRequest().denyAll())

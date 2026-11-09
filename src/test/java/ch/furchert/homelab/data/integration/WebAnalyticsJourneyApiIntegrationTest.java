@@ -253,7 +253,7 @@ class WebAnalyticsJourneyApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.byPage", hasSize(0)))
                 .andExpect(jsonPath("$.enquiries.totalSubmits").value(0))
                 .andExpect(jsonPath("$.dataQuality.edge.bot").value(3))
-                .andExpect(jsonPath("$.dataQuality.cappedDays").value(nullValue()));
+                .andExpect(jsonPath("$.dataQuality.cappedDays").value(0));
     }
 
     private ResultActions get(String url) throws Exception {

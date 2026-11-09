@@ -445,6 +445,15 @@ class AggregateQueryRepository {
                 (rs, i) -> new StageReason(rs.getString("stage"), rs.getString("reason"), rs.getLong("events")));
     }
 
+    /** WA-5: Zurich receipt days in [from, to] with a capped batch ({@code daily_ingest_stats} stage {@code capped}). */
+    long cappedDays(LocalDate from, LocalDate to) {
+        Long n = named.queryForObject("""
+                        SELECT count(DISTINCT day) FROM webanalytics.daily_ingest_stats
+                        WHERE stage = 'capped' AND events > 0 AND day >= :from AND day <= :to
+                        """, range(from, to), Long.class);
+        return n == null ? 0 : n;
+    }
+
     private static MapSqlParameterSource range(LocalDate from, LocalDate to) {
         return new MapSqlParameterSource("from", from).addValue("to", to);
     }

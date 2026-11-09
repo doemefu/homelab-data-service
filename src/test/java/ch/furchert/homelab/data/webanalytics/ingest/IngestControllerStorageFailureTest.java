@@ -35,7 +35,7 @@ class IngestControllerStorageFailureTest {
         IngestService service = mock(IngestService.class);
         when(service.ingest(any(), anyString()))
                 .thenThrow(new DataIntegrityViolationException("Failing row contains (secret-visitor-id)"));
-        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new IngestController(new IngestJson(), service))
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new IngestController(new IngestJson(), service, mock(CappedBatchRecorder.class)))
                 .setControllerAdvice(new ProblemDetailsAdvice())
                 .build();
         Jwt jwt = Jwt.withTokenValue("t").header("alg", "RS256").subject("furchert-ch")

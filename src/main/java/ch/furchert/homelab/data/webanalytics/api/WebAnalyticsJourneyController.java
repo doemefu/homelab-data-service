@@ -232,20 +232,25 @@ public class WebAnalyticsJourneyController {
         return steps;
     }
 
-    /** {@code dataQuality} from {@code daily_ingest_stats} over the range, every known key 0-filled (rev 3.5). */
+    /**
+     * {@code dataQuality} from {@code daily_ingest_stats} over the range, every known key 0-filled (rev 3.5);
+     * {@code cappedDays} = receipt days with a capped batch (WA-5), {@code null} without a range.
+     */
     private ReadDtos.DataQuality dataQuality(LocalDate from, LocalDate to) {
         Map<String, Long> edge = new LinkedHashMap<>();
         WebAnalyticsMetrics.EDGE_REASONS.forEach(reason -> edge.put(reason, 0L));
         Map<String, Long> secondLine = new LinkedHashMap<>();
         for (RejectReason reason : RejectReason.values()) {
-            secondLine.put(reason.label(), 0L);
+            if (reason.validation()) { // the six validation reasons only, never erased/visitor_cap (WA-5)
+                secondLine.put(reason.label(), 0L);
+            }
         }
         long duplicates = 0;
         if (from != null) {
             for (AggregateQueryRepository.StageReason s : queries.ingestStats(from, to)) {
                 switch (s.stage()) {
                     case "edge" -> edge.merge(s.reason(), s.events(), Long::sum);
-                    case "rejected" -> secondLine.merge(s.reason(), s.events(), Long::sum);
+                    case "rejected" -> secondLine.computeIfPresent(s.reason(), (k, v) -> v + s.events());
                     case "duplicate" -> duplicates += s.events();
                     default -> {
                         // accepted and later stages are not part of dataQuality
@@ -253,7 +258,8 @@ public class WebAnalyticsJourneyController {
                 }
             }
         }
-        return new ReadDtos.DataQuality(edge, secondLine, duplicates, null);
+        return new ReadDtos.DataQuality(edge, secondLine, duplicates,
+                from == null ? null : queries.cappedDays(from, to));
     }
 
     /** Sorted by visits desc, key asc; the remainder is one {@code (other)} item. */

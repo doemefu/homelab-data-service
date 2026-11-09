@@ -118,9 +118,11 @@ class WebAnalyticsIngestIntegrationTest extends AbstractIntegrationTest {
         raw.pageview(visitor, dayStart.minusSeconds(3600), "/");
         raw.pageview(visitor, dayStart.plusSeconds(60), "/it");
         raw.goal(visitor, dayStart.plusSeconds(120));
-        var seed = repository.activity(dayStart);
-        assertThat(seed.capCountedToday()).isEqualTo(1);
-        assertThat(seed.newestReceivedAt()).isEqualTo(dayStart.plusSeconds(120));
+        // WA-5: the cap ledger is seeded per UTC hour of received_at (analytics events only, goal excluded).
+        assertThat(repository.analyticsPerHour(dayStart)).containsExactlyEntriesOf(Map.of(dayStart, 1L));
+        assertThat(repository.analyticsPerHour(dayStart.minusSeconds(3600)))
+                .containsEntry(dayStart.minusSeconds(3600), 1L).containsEntry(dayStart, 1L);
+        assertThat(repository.newestReceivedAt()).isEqualTo(dayStart.plusSeconds(120));
     }
 
     @Test

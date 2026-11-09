@@ -14,16 +14,17 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * Daily retention (docs/060 §3.5): for every registered {@link RetentionTarget}, delete rows older than
- * its retention in batches of 5 000 until none are left, logging only {@code [retention] <table> deleted=<n>}.
- * Each sub-project registers the targets for its own tables (NM-1: {@code InboundRetentionConfig}).
+ * Daily retention (docs/060 §3.5, docs/100 §7.7): for every registered {@link RetentionTarget}, delete rows older
+ * than its retention in batches (default 5 000) until none are left, logging only
+ * {@code [retention] <table> deleted=<n>} ({@code webanalytics.events} with its schema). Each sub-project registers
+ * the targets for its own tables (NM-1: {@code InboundRetentionConfig}; WA-5: {@code WebAnalyticsRetentionConfig}).
  * The job never truncates, and the API has no manual deletion path.
  */
 @Component
 public class RetentionJob implements NetmonCollector {
 
     public static final String NAME = "retention";
-    static final int BATCH_SIZE = 5_000;
+    static final int BATCH_SIZE = RetentionTarget.DEFAULT_BATCH_SIZE;
 
     private static final Logger log = LoggerFactory.getLogger(RetentionJob.class);
 
@@ -68,7 +69,7 @@ public class RetentionJob implements NetmonCollector {
     public void collect() {
         for (RetentionTarget target : targets()) {
             long deleted = purge(target);
-            log.info("[retention] {} deleted={}", target.table(), deleted);
+            log.info("[retention] {} deleted={}", target.qualifiedName(), deleted);
         }
     }
 
@@ -77,13 +78,14 @@ public class RetentionJob implements NetmonCollector {
     }
 
     private long purge(RetentionTarget target) {
-        // Identifiers are validated by RetentionTarget; only the day count is a bind parameter.
+        // Schema and identifiers are validated by RetentionTarget; only the day count is a bind parameter.
         // The guard, if any, is a fixed SQL fragment from code on the alias t.
-        String sql = "DELETE FROM netmon." + target.table()
-                + " WHERE ctid IN (SELECT t.ctid FROM netmon." + target.table() + " t"
+        String table = target.schema() + "." + target.table();
+        String sql = "DELETE FROM " + table
+                + " WHERE ctid IN (SELECT t.ctid FROM " + table + " t"
                 + " WHERE t." + target.timeColumn() + " < now() - make_interval(days => :days)"
                 + (target.guard() == null ? "" : " AND (" + target.guard() + ")")
-                + " LIMIT " + BATCH_SIZE + ")";
+                + " LIMIT " + target.batchSize() + ")";
         long total = 0;
         int deleted;
         do {

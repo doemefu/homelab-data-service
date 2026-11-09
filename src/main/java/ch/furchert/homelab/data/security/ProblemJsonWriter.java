@@ -1,6 +1,7 @@
 package ch.furchert.homelab.data.security;
 
 import ch.furchert.homelab.data.web.ProblemCode;
+import ch.furchert.homelab.data.web.ProblemInstance;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
@@ -31,7 +32,7 @@ final class ProblemJsonWriter {
         body.put("title", status.getReasonPhrase());
         body.put("status", status.value());
         body.put("detail", detail);
-        body.put("instance", request.getRequestURI());
+        body.put("instance", ProblemInstance.of(request.getRequestURI()));
         body.put("code", ProblemCode.forStatus(status));
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);

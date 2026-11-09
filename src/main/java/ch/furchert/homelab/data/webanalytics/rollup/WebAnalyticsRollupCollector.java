@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -78,7 +79,7 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         this.transactions = new TransactionTemplate(transactionManager);
         this.clock = clock;
         this.days = new ZurichDays(properties.timezone());
-        this.planner = new RollupPlanner(days);
+        this.planner = new RollupPlanner(days, properties.retention().eventsDays());
         this.netmonRetentionDays = retention.inboundRequestGroupsDays();
     }
 
@@ -120,14 +121,19 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         List<LocalDate> plan = planner.plan(clock.instant(), repository.rolledDays());
         Map<LocalDate, DaySummary> memo = new HashMap<>();
         Set<YearMonth> months = new LinkedHashSet<>();
-        int written = 0;
+        List<LocalDate> written = new ArrayList<>();
+        int kept = 0;
         for (LocalDate day : plan) {
-            Boolean done = transactions.execute(status -> rollDay(day, memo));
-            if (!Boolean.TRUE.equals(done)) {
-                throw new CollectorWarning(ErrorCode.PARTIAL,
-                        "advisory lock held by another session; run stopped after " + written + " day(s)");
+            DayResult result = transactions.execute(status -> rollDay(day, memo));
+            if (result == DayResult.KEPT_BY_GUARD) {
+                kept++;
+                continue;
             }
-            written++;
+            if (result != DayResult.WRITTEN) {
+                throw new CollectorWarning(ErrorCode.PARTIAL,
+                        "advisory lock held by another session; run stopped after " + written.size() + " day(s)");
+            }
+            written.add(day);
             months.add(YearMonth.from(day));
             if (day.getDayOfMonth() <= 2) {
                 months.add(YearMonth.from(day).minusMonths(1));
@@ -141,10 +147,26 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
                         "advisory lock held by another session; monthly visitors not written");
             }
         }
-        String cfProblems = cfBaseline(plan);
-        if (cfProblems != null) {
-            throw new CollectorWarning(ErrorCode.PARTIAL, cfProblems);
+        String cfProblems = cfBaseline(written);
+        List<String> problems = new ArrayList<>();
+        if (kept > 0) {
+            problems.add("freeze guard kept " + kept + " day(s)");
         }
+        if (cfProblems != null) {
+            problems.add(cfProblems);
+        }
+        if (!problems.isEmpty()) {
+            throw new CollectorWarning(ErrorCode.PARTIAL, String.join("; ", problems));
+        }
+    }
+
+    /** Outcome of one day transaction. */
+    enum DayResult {
+        WRITTEN,
+        /** The advisory lock is held elsewhere: the run stops. */
+        LOCKED,
+        /** Freeze guard (d): a final day whose raw events are gone keeps its aggregates. */
+        KEPT_BY_GUARD
     }
 
     /**
@@ -327,11 +349,20 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
         return true;
     }
 
-    private boolean rollDay(LocalDate day, Map<LocalDate, DaySummary> memo) {
+    private DayResult rollDay(LocalDate day, Map<LocalDate, DaySummary> memo) {
         if (!repository.tryLock()) {
-            return false;
+            return DayResult.LOCKED;
         }
         repository.applyDaySettings();
+        // Freeze guard (d), read after the lock (docs/100 §7.5; WA-5 ruling R1): a FINAL day that had raw events and now
+        // has none (retention or a manual purge) is never recomputed; its aggregates stay. Provisional days are always
+        // recomputed (an erased visitor's provisional day goes to zero and is finalised).
+        int[] raw = repository.rawCounts(days.start(day), days.start(day.plusDays(1)));
+        Optional<RollupRepository.StoredDay> stored = repository.storedDay(day);
+        if (raw[0] == 0 && stored.filter(d -> d.fin() && d.rawEvents() > 0).isPresent()) {
+            log.warn("[{}] day={} kept by the freeze guard (final, raw events gone)", NAME, day);
+            return DayResult.KEPT_BY_GUARD;
+        }
         Instant now = clock.instant();
         DayVisits computed = computeDay(day, true);
         memo.put(day, computed.summary());
@@ -354,7 +385,6 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
                 visitors7d.size(), visitors28d.size(),
                 (int) offerVisits28d.values().stream().filter(n -> n >= 2).count());
 
-        int[] raw = repository.rawCounts(days.start(day), days.start(day.plusDays(1)));
         boolean fin = days.isClosed(day, now);
         repository.replaceDay(day, days.start(day), days.start(day.plusDays(1)), computed.rows(), visitors, new RollupDayRow(day, raw[0], raw[1],
                 computed.included(), computed.orphans(), RollupPlanner.DEFINITION_VERSION, fin, now));
@@ -362,7 +392,7 @@ public class WebAnalyticsRollupCollector implements NetmonCollector {
                 .ifPresent(end -> state.updateWindowEnd(NAME, days.start(end.plusDays(1))));
         log.info("[{}] day={} final={} visits={} orphan={} excluded={}", NAME, day, fin, computed.included(),
                 computed.orphans(), computed.excluded());
-        return true;
+        return DayResult.WRITTEN;
     }
 
     private boolean rollMonth(YearMonth month, LocalDate yesterday, Map<LocalDate, DaySummary> memo) {

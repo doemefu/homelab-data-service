@@ -92,3 +92,14 @@ webanalytics:
   # future /api/webanalytics/coverage compares nothing. Keep the explicit entry (RollupEnableBindingTest style test).
   coverage:
     go-live-date:
+  # docs/100 §6.4, §11 (WA-5): caps on accepted pageview/engagement/click events (goal and enquiry are exempt), counted
+  # per UTC day/hour of received_at; over a cap the batch gets 429 with capScope/retryAt. 0 caps every batch with
+  # analytics events (data-side stop). Env: WEBANALYTICS_INGEST_DAILYCAP, _HOURLYCAP, _VISITORDAILYCAP.
+  ingest:
+    daily-cap: 10000
+    hourly-cap: 2500
+    visitor-daily-cap: 500
+  # docs/100 §7.7, §11 (WA-5): webanalytics.events rows older than this are deleted by the 03:30 UTC retention job;
+  # below 370 the application does not start. Env: WEBANALYTICS_RETENTION_EVENTSDAYS.
+  retention:
+    events-days: 396

@@ -96,6 +96,17 @@ public class RollupRepository {
                         rs.getInt("definition_version")));
     }
 
+    /** The stored {@code rollup_day} facts the freeze guard (d) needs. */
+    public record StoredDay(boolean fin, int rawEvents) {
+    }
+
+    /** The day's {@code rollup_day} row, if any (freeze guard (d), read after the lock). */
+    public Optional<StoredDay> storedDay(LocalDate day) {
+        return named.query("SELECT final, raw_events FROM webanalytics.rollup_day WHERE day = :day",
+                new MapSqlParameterSource("day", day),
+                (rs, i) -> new StoredDay(rs.getBoolean("final"), rs.getInt("raw_events"))).stream().findFirst();
+    }
+
     /** {@code pg_try_advisory_xact_lock(hashtext('webanalytics-rollup'))}; held until the transaction ends. */
     public boolean tryLock() {
         Boolean locked = named.getJdbcTemplate().queryForObject(

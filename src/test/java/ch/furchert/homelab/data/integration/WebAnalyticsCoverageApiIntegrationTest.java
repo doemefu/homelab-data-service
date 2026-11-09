@@ -116,4 +116,25 @@ class WebAnalyticsCoverageApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.byPage", hasSize(0)))
                 .andExpect(jsonPath("$.enquiries.totalSubmits").value(0));
     }
+
+    @Test
+    void dataQualityKeepsTheSixValidationReasonsAndCountsCappedDays() throws Exception {
+        AggregateRows rows = new AggregateRows(jdbc);
+        rows.rollupDay(LocalDate.parse("2026-11-06"), true);
+        rows.ingestStats(LocalDate.parse("2026-11-05"), "rejected", "erased", 4);
+        rows.ingestStats(LocalDate.parse("2026-11-05"), "rejected", "visitor_cap", 2);
+        rows.ingestStats(LocalDate.parse("2026-11-05"), "rejected", "shape", 1);
+        rows.ingestStats(LocalDate.parse("2026-11-05"), "capped", "hour", 30);
+        rows.ingestStats(LocalDate.parse("2026-11-06"), "capped", "day", 10);
+        rows.ingestStats(LocalDate.parse("2026-11-06"), "capped", "hour", 5);
+
+        mockMvc.perform(get("/api/webanalytics/coverage?from=2026-11-01&to=2026-11-06")
+                        .header("Authorization", "Bearer " + TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.dataQuality.secondLine.shape").value(1))
+                .andExpect(jsonPath("$.dataQuality.secondLine.erased").doesNotExist())
+                .andExpect(jsonPath("$.dataQuality.secondLine.visitor_cap").doesNotExist())
+                .andExpect(jsonPath("$.dataQuality.secondLine.length()").value(6))
+                .andExpect(jsonPath("$.dataQuality.cappedDays").value(2));
+    }
 }
