@@ -29,6 +29,8 @@ GitHub Actions `Build and Push` (`.github/workflows/build.yml`) runs on every pu
 
 No `latest` tag is published.
 
+The push job runs only on `main` (job-level branch guard). The QEMU (`tonistiigi/binfmt`) and BuildKit (`moby/buildkit`) images it uses are pinned by tag and index digest in `build.yml`; Dependabot does not track them, so bump tag and digest together by hand. Pull requests build the image for `linux/amd64` without pushing (`ci.yml`, job `image`), and the `pin-check` job rejects any action that is not pinned by full commit SHA.
+
 ## Bootstrap sequence (NM-0) — completed 2026-09-23
 
 `k8s/deployment.yaml` starts with the placeholder tag `main-20260923T000000`. That image was never built. auth-service and device-service were bootstrapped the same way: Flux image automation replaces the placeholder with the newest real tag and commits that change to `main`.

@@ -5,6 +5,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Security
+- CI hardening (security review follow-up, doemefu/homelab-device-service#126): a `pin-check` job fails any `uses:` that is not pinned by full commit SHA (or `docker://…@sha256:`); a checksum-verified `actionlint` job; a PR-only `image` job builds the image without pushing; the push job in `build.yml` runs only on `main`; the binfmt and BuildKit images used by the build are pinned by digest; Dependabot waits 7 days before proposing a new action release.
 - Spring Boot 4.1.1 → 4.1.2 (Jackson 2.21.7/3.1.7 fixes, Tomcat 11.0.27, PostgreSQL driver 42.7.14); the `tomcat.version` override is removed.
 - Deployment hardening (#24): `runAsNonRoot` (uid 100 / gid 101), `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem with an `emptyDir` at `/tmp`.
 - emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 (eMudhra compromise) are not trusted: a temporary build step deleted them from the JRE cacerts (#38, #39; doemefu/homelab#212) until Temurin 25.0.5+8, whose cacerts no longer contain them; the step is removed (doemefu/homelab#212).

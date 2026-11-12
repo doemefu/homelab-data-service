@@ -29,3 +29,66 @@ jobs:
 
       - name: Run tests
         run: ./mvnw -B verify
+
+  # Every `uses:` must be a local action, `owner/repo[/path]@<full 40-hex commit SHA>`
+  # or `docker://…@sha256:<digest>`; anything else (tags, branches, short SHAs) fails.
+  pin-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that every action is pinned by full commit SHA
+        run: |
+          bad=$(grep -rnE '^\s*-?\s*\{?\s*uses:' .github/workflows/ \
+            | grep -vE "uses:\s+[\"']?(\./[^ \"']*|[^ @\"']+@[0-9a-f]{40}|docker://[^ \"']+@sha256:[0-9a-f]{64})[\"']?\}?(\s+#.*)?$") \
+            && { echo "$bad"; echo "::error::unpinned uses: (pin by full commit SHA)"; exit 1; } || true
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same pinned, checksum-verified binary as the homelab repo's CI.
+      - name: Install actionlint (pinned + checksum-verified)
+        env:
+          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+        run: |
+          set -euo pipefail
+          asset="actionlint_1.7.7_linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v1.7.7/${asset}"
+          echo "${ACTIONLINT_SHA256}  ${asset}" | sha256sum -c -
+          sudo tar -xzf "${asset}" -C /usr/local/bin actionlint
+          rm -f "${asset}"
+
+      - name: Run actionlint
+        run: actionlint -color
+
+  # Builds the container image on PRs (amd64 only, never pushed), so Dockerfile,
+  # base-image and action bumps fail on the PR instead of on main.
+  image:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same pinned BuildKit image as build.yml. Keep in sync.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=docker.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          tags: homelab-data-service:ci
+          # Read-only reuse of main's layer cache; PR runs never write it.
+          cache-from: type=gha
