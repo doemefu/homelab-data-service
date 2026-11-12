@@ -4,7 +4,7 @@
 # or docker://…@sha256:<64-hex digest>. Tags, branches and short SHAs fail.
 #
 # The values are extracted wherever they sit on a line (block or flow style, quoted key or
-# value, several per line); comments are stripped first. A value on the line after its key
+# value, whitespace before the colon, several per line); comments are stripped first. A value on the line after its key
 # extracts as empty and fails, so the check errs on the side of failing.
 set -euo pipefail
 dir="${1:-.github/workflows}"
@@ -15,7 +15,7 @@ refs=$(find "$dir" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | xargs
     line = $0
     sub(/^[[:space:]]*#.*/, "", line)
     sub(/[[:space:]]#.*$/, "", line)
-    while (match(line, /(^|[[:space:]{,])["\047]?uses["\047]?:/)) {
+    while (match(line, /(^|[[:space:]{,])["\047]?uses["\047]?[[:space:]]*:/)) {
       line = substr(line, RSTART + RLENGTH)
       sub(/^[[:space:]]*/, "", line)
       match(line, /^[^[:space:],}]*/)
