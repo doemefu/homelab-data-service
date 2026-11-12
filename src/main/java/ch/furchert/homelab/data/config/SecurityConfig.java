@@ -1,6 +1,7 @@
 package ch.furchert.homelab.data.config;
 
 import ch.furchert.homelab.data.security.AllowedClientAuthorizationManager;
+import ch.furchert.homelab.data.security.IdTokenRejectingValidator;
 import ch.furchert.homelab.data.security.NoUserRoleAuthorizationManager;
 import ch.furchert.homelab.data.security.ProblemJsonAccessDeniedHandler;
 import ch.furchert.homelab.data.security.ProblemJsonAuthenticationEntryPoint;
@@ -17,6 +18,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
@@ -168,6 +171,16 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .csrf(csrf -> csrf.ignoringRequestMatchers("/error"));
         return http.build();
+    }
+
+    /**
+     * Rejects ID tokens at the decoder, so every chain answers 401 before authorization. Spring Boot adds
+     * {@code OAuth2TokenValidator<Jwt>} beans to the auto-configured {@code JwtDecoder}, next to the issuer and
+     * timestamp checks; do not declare a {@code JwtDecoder} bean, or this wiring is lost.
+     */
+    @Bean
+    OAuth2TokenValidator<Jwt> idTokenRejectingValidator() {
+        return new IdTokenRejectingValidator();
     }
 
     /**
