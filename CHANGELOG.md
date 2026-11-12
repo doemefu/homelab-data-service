@@ -5,6 +5,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Security
+- ID tokens are rejected as bearer tokens (security review follow-up, doemefu/furchert-ch#199): an `azp`-based `OAuth2TokenValidator` bean, a local copy of auth-service's `IdTokenRejectingValidator`, joins Boot's auto-configured `JwtDecoder`, so `/api/netmon/**` and `/api/webanalytics/**` answer 401 to a correctly signed ID token instead of 403. Access tokens carry no `azp`, so the furchert-ch client-credentials tokens are unaffected.
 - Spring Boot 4.1.1 → 4.1.2 (Jackson 2.21.7/3.1.7 fixes, Tomcat 11.0.27, PostgreSQL driver 42.7.14); the `tomcat.version` override is removed.
 - Deployment hardening (#24): `runAsNonRoot` (uid 100 / gid 101), `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem with an `emptyDir` at `/tmp`.
 - emSign ECC Root CA – G3, emSign Root CA – C1 and emSign ECC Root CA – C3 (eMudhra compromise) are not trusted: a temporary build step deleted them from the JRE cacerts (#38, #39; doemefu/homelab#212) until Temurin 25.0.5+8, whose cacerts no longer contain them; the step is removed (doemefu/homelab#212).
