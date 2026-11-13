@@ -5,6 +5,7 @@ All notable changes to homelab-data-service. Format: [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Security
+- CI hardening (security review follow-up, doemefu/homelab-device-service#126): a `pin-check` job fails any `uses:` that is not pinned by full commit SHA (or `docker://…@sha256:`); a checksum-verified `actionlint` job; a PR-only `image` job builds the image without pushing; the push job in `build.yml` runs only on `main`; the binfmt and BuildKit images used by the build are pinned by digest; Dependabot waits 7 days before proposing a new action release.
 - ID tokens are rejected as bearer tokens (security review follow-up, doemefu/furchert-ch#199): an `azp`-based `OAuth2TokenValidator` bean, a local copy of auth-service's `IdTokenRejectingValidator`, joins Boot's auto-configured `JwtDecoder`, so `/api/netmon/**` and `/api/webanalytics/**` answer 401 to a correctly signed ID token instead of 403. Access tokens carry no `azp`, so the furchert-ch client-credentials tokens are unaffected.
 - Spring Boot 4.1.1 → 4.1.2 (Jackson 2.21.7/3.1.7 fixes, Tomcat 11.0.27, PostgreSQL driver 42.7.14); the `tomcat.version` override is removed.
 - Deployment hardening (#24): `runAsNonRoot` (uid 100 / gid 101), `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem with an `emptyDir` at `/tmp`.

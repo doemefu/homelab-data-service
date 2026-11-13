@@ -21,10 +21,13 @@ updates:
           - "io.micrometer*"
 
   # Actions are pinned by commit SHA with a version comment; Dependabot updates both.
+  # The cooldown keeps a release out of a PR until it is 7 days old.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   # Base images are pinned by tag + index digest; Dependabot updates both.
   - package-ecosystem: docker
