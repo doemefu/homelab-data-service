@@ -25,6 +25,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      codeql:
+        patterns:
+          - "github/codeql-action*"
 
   # Base images are pinned by tag + index digest; Dependabot updates both.
   - package-ecosystem: docker
