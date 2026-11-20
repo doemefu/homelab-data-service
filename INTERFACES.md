@@ -8,7 +8,7 @@ Base URL (cluster-internal only): `http://data-service.apps.svc.cluster.local:80
 
 ### Authentication and authorization (§7.5)
 
-- `Authorization: Bearer <JWT>` issued by auth-service. Signature (JWKS), `exp` and `iss` are validated.
+- `Authorization: Bearer <JWT>` issued by auth-service. Signature (JWKS), `exp` and `iss` are validated. ID tokens (any token with an `azp` claim) are rejected with 401, as in auth-service and device-service.
 - v1 grants access **only** if the token has scope `netmon:read` **and** its `sub` is listed in `netmon.api.allowed-clients` (default `[furchert-ch]`).
 - `ROLE_ADMIN` is **not** accepted. User tokens with `role=ADMIN` are held by several SSO clients (grafana, n8n, litellm, Home Assistant), so accepting them would expose IP-level data to any of those apps.
 - Authorities: the auth-service converter pattern merges `SCOPE_*` (from `scope`) and `ROLE_*` (from `role`).
@@ -40,7 +40,7 @@ RFC 9457 `application/problem+json` with `type` (`about:blank`), `title`, `statu
 |---|---|---|
 | 400 | `invalid_window` | `from`/`to` not ISO-8601 instants, or `to - from` not in (0, 30 d] |
 | 400, 405, 406, 415 | `invalid_parameter` | Malformed request: `limit` out of range, malformed `ip` or `cursor`, wrong method or media type |
-| 401 | `unauthorized` | Missing, malformed, expired, wrongly signed or wrong-issuer token; also carries `WWW-Authenticate: Bearer …` |
+| 401 | `unauthorized` | Missing, malformed, expired, wrongly signed or wrong-issuer token, or an ID token (`azp` present); also carries `WWW-Authenticate: Bearer …` |
 | 403 | `forbidden` | Valid token without `netmon:read` or with a `sub` outside the allowlist |
 | 404 | `not_found` | Unknown path, or `GET /ips/{ip}` for an IP never seen |
 | 500 | `internal` | Unexpected error, or token validation impossible because auth-service's JWKS is unreachable |
@@ -213,7 +213,7 @@ Contract: `docs/100-web-analytics.md` §6.1 to §6.3, §7.2, §7.9 (Epic doemefu
 
 ### Authentication and authorization (§6.1)
 
-- `Authorization: Bearer <JWT>` from auth-service; signature, `exp` and `iss` validated as for netmon.
+- `Authorization: Bearer <JWT>` from auth-service; signature, `exp` and `iss` validated and ID tokens rejected as for netmon.
 - Access requires scope `analytics:write` **and** a `sub` in `webanalytics.api.write-clients` (default `[furchert-ch]`) **and** no `ROLE_*` authority. auth-service puts `role` only into user-driven tokens, so the last rule is defence in depth against role-bearing user tokens (for example a username equal to a client id, or a user token that obtained the scope through an authorization-code flow). It is not a positive client-credentials check; that one belongs to doemefu/homelab-auth-service#143.
 - A write token has no access to `/api/netmon/**` (403), and a `netmon:read` or `analytics:read` token has no access here (403).
 - Token request (one token per scope, never combined):
